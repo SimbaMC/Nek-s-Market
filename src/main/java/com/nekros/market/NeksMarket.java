@@ -29,6 +29,6 @@ public class NeksMarket {
 
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
-        MarketCommands.register(event.getDispatcher());
+        MarketCommands.register(event.getDispatcher(), event.getBuildContext());
     }
 }

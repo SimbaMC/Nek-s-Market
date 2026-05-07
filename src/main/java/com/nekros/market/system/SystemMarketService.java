@@ -4,8 +4,11 @@ import com.nekros.market.economy.MarketEconomy;
 import com.nekros.market.pricing.system.SystemPriceService;
 import com.nekros.market.pricing.system.SystemTradeQuote;
 import com.nekros.market.storage.MarketSavedData;
+import com.nekros.market.storage.SystemStockSavedData;
 import com.nekros.market.util.InventoryUtil;
 
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
 
 public final class SystemMarketService {
@@ -42,6 +45,7 @@ public final class SystemMarketService {
                 return Result.fail("You do not have enough " + MarketEconomy.CURRENCY_NAME + ".");
             }
             InventoryUtil.addSplit(player.getInventory(), offer.item(), count);
+            SystemStockSavedData.get(player.server).recordSystemSell(itemId(offer), count);
             data.setDirty();
             return Result.success("Bought " + offer.item().getHoverName().getString() + " x" + count + " for " + totalPrice + " " + MarketEconomy.CURRENCY_NAME + ".");
         }
@@ -54,8 +58,13 @@ public final class SystemMarketService {
             return Result.fail("Could not remove the selected item from your inventory.");
         }
         MarketEconomy.add(data, player.getUUID(), totalPrice);
+        SystemStockSavedData.get(player.server).recordSystemBuy(itemId(offer), count);
         data.setDirty();
         return Result.success("Sold " + offer.item().getHoverName().getString() + " x" + count + " for " + totalPrice + " " + MarketEconomy.CURRENCY_NAME + ".");
+    }
+
+    private static ResourceLocation itemId(SystemMarketOffer offer) {
+        return BuiltInRegistries.ITEM.getKey(offer.item().getItem());
     }
 
     public record Result(boolean success, String message) {

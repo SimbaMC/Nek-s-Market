@@ -491,7 +491,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         systemBuyScrollRow = clampScrollRow(systemBuyScrollRow, totalRows, rows);
         int firstVisibleOffer = systemBuyScrollRow * columns;
         int lastVisibleOffer = firstVisibleOffer + rows * columns;
-        List<SystemMarketOffer> systemOffers = SystemMarketOffer.offers();
+        List<SystemMarketOffer> systemOffers = systemOffersForDisplay();
         for (Button button : systemTradeButtons) {
             button.visible = false;
             button.active = false;
@@ -569,7 +569,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         systemSellScrollRow = clampScrollRow(systemSellScrollRow, totalRows, rows);
         int firstVisibleOffer = systemSellScrollRow * columns;
         int lastVisibleOffer = firstVisibleOffer + rows * columns;
-        List<SystemMarketOffer> systemOffers = SystemMarketOffer.offers();
+        List<SystemMarketOffer> systemOffers = systemOffersForDisplay();
         int visibleIndex = 0;
         for (int i = 0; i < systemOffers.size(); i++) {
             SystemMarketOffer offer = systemOffers.get(i);
@@ -747,8 +747,8 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         guiGraphics.drawString(font, trim(stack.getHoverName().getString(), 210), nameX, nameY, 0xF3F0E8, false);
         guiGraphics.drawString(font, trim(BuiltInRegistries.ITEM.getKey(selectedAdminItem).toString(), 210), nameX, idY, 0xAEB7C4, false);
         guiGraphics.drawString(font, "Slot: " + selectedAdminCategorySlotName(), nameX, slotY, 0xD6E8D2, false);
-        guiGraphics.drawString(font, "Price", priceLabelX, priceLabelY, 0xD9DEE8, false);
-        guiGraphics.drawString(font, "Buy uses selected slot. Sell creates buyback.", hintX, hintY, 0xAEB7C4, false);
+        guiGraphics.drawString(font, "Fallback Price", priceLabelX, priceLabelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, dynamicAdminPriceText(selectedAdminItem), hintX, hintY, 0xAEB7C4, false);
     }
 
     private void renderBuyConfirmation(GuiGraphics guiGraphics) {
@@ -900,7 +900,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             button.visible = systemMode && !systemSellPage && !confirmingBuy;
             button.active = button.visible && !category.equals(selectedSystemBuyCategory);
         }
-        List<SystemMarketOffer> systemOffers = SystemMarketOffer.offers();
+        List<SystemMarketOffer> systemOffers = systemOffersForDisplay();
         for (int i = 0; i < systemTradeButtons.size(); i++) {
             if (i >= systemOffers.size()) {
                 systemTradeButtons.get(i).visible = false;
@@ -1161,7 +1161,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
     }
 
     private void openSystemOffer(int offerIndex) {
-        List<SystemMarketOffer> offers = SystemMarketOffer.offers();
+        List<SystemMarketOffer> offers = systemOffersForDisplay();
         if (offerIndex >= 0 && offerIndex < offers.size()) {
             openSystemConfirmation(offers.get(offerIndex));
         }
@@ -1309,12 +1309,29 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         String id = generatedAdminOfferId(sellOffer ? "buy_from_player" : "sell_to_player",
                 BuiltInRegistries.ITEM.getKey(item).toString(),
                 sellOffer ? "" : selectedAdminCategorySlotName());
-        for (SystemMarketOffer offer : SystemMarketOffer.offers()) {
-            if (offer.id().equals(id)) {
+        for (String line : SystemMarketOffer.fallbackOfferLines()) {
+            SystemMarketOffer offer = SystemMarketOffer.parse(line);
+            if (offer != null && offer.id().equals(id)) {
                 return Long.toString(offer.unitPrice());
             }
         }
         return "";
+    }
+
+    private String dynamicAdminPriceText(Item item) {
+        String itemId = BuiltInRegistries.ITEM.getKey(item).toString();
+        String buyId = generatedAdminOfferId("sell_to_player", itemId, selectedAdminCategorySlotName());
+        String sellId = generatedAdminOfferId("buy_from_player", itemId, "");
+        String buyPrice = "";
+        String sellPrice = "";
+        for (SystemMarketOffer offer : systemOffersForDisplay()) {
+            if (offer.id().equals(buyId)) {
+                buyPrice = Long.toString(offer.unitPrice());
+            } else if (offer.id().equals(sellId)) {
+                sellPrice = Long.toString(offer.unitPrice());
+            }
+        }
+        return "Dynamic buy: " + (buyPrice.isBlank() ? "-" : buyPrice) + " / sell: " + (sellPrice.isBlank() ? "-" : sellPrice);
     }
 
     private List<Item> adminItems() {
@@ -1465,12 +1482,21 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
 
     private int systemVisibleOfferCount() {
         int count = 0;
-        for (SystemMarketOffer offer : SystemMarketOffer.offers()) {
+        for (SystemMarketOffer offer : systemOffersForDisplay()) {
             if (isSystemOfferVisible(offer)) {
                 count++;
             }
         }
         return count;
+    }
+
+    private static List<SystemMarketOffer> systemOffersForDisplay() {
+        List<SystemMarketOffer> offers = new ArrayList<>();
+        for (SystemMarketOffer offer : SystemMarketOffer.offers()) {
+            offers.removeIf(existing -> existing.type() == offer.type() && existing.item().is(offer.item().getItem()));
+            offers.add(offer);
+        }
+        return List.copyOf(offers);
     }
 
     private void scrollActiveView(int deltaRows) {

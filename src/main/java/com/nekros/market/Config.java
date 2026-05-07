@@ -66,6 +66,14 @@ public class Config {
             .comment("Recent trade count required for full player market confidence.")
             .defineInRange("pricing.marketConfidenceTradeCount", 30, 1, 10000);
 
+    public static final ModConfigSpec.DoubleValue SYSTEM_STOCK_BUY_PRICE_IMPACT_PER_ITEM = BUILDER
+            .comment("How much each stocked item lowers the system buy-from-player price. Example: 0.002 means 100 stocked items lower buy price by 20%.")
+            .defineInRange("systemMarket.stockBuyPriceImpactPerItem", 0.002D, 0.0D, 1.0D);
+
+    public static final ModConfigSpec.DoubleValue SYSTEM_STOCK_MIN_BUY_PRICE_RATIO = BUILDER
+            .comment("Lowest stock-adjusted ratio for system buy-from-player prices.")
+            .defineInRange("systemMarket.stockMinBuyPriceRatio", 0.25D, 0.0D, 1.0D);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     public static long defaultListingDurationMillis() {

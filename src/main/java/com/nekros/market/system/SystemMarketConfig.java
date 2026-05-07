@@ -15,16 +15,19 @@ public final class SystemMarketConfig {
     }
 
     public static Result addOffer(String id, String type, String itemId, long unitPrice, String category) {
-        String line = id.trim() + "|" + type.trim() + "|" + itemId.trim() + "|" + unitPrice + "|" + category.trim();
+        String normalizedCategory = normalizeCategory(type, category);
+        String line = id.trim() + "|" + type.trim() + "|" + itemId.trim() + "|" + unitPrice + "|" + normalizedCategory;
         if (SystemMarketOffer.parse(line) == null) {
             return Result.fail("Invalid system offer.");
         }
 
         List<String> offers = mutableOffers();
         offers.removeIf(value -> value.split("\\|", -1)[0].trim().equals(id.trim()));
+        offers.removeIf(value -> sameShelfItem(value, line));
         offers.add(line);
         saveOffers(offers);
-        return Result.success("Saved system offer: " + id.trim());
+        String categoryNote = normalizedCategory.isEmpty() ? "" : " in category " + normalizedCategory;
+        return Result.success("Saved system offer: " + id.trim() + categoryNote);
     }
 
     public static Result removeOffer(String id) {
@@ -74,9 +77,10 @@ public final class SystemMarketConfig {
         try (CommentedFileConfig config = CommentedFileConfig.builder(configPath).sync().autosave().build()) {
             config.load();
             List<String> categories = stringList(config.get("systemMarket.buyCategories"));
-            List<String> offers = stringList(config.get("systemMarket.offers"));
+            List<String> offers = deduplicateShelfItems(stringList(config.get("systemMarket.offers")));
             Config.SYSTEM_BUY_CATEGORIES.set(categories);
             Config.SYSTEM_OFFERS.set(offers);
+            Config.SPEC.save();
             return Result.success("Reloaded system market config.");
         } catch (RuntimeException exception) {
             NeksMarket.LOGGER.warn("Failed to reload system market config.", exception);
@@ -92,8 +96,26 @@ public final class SystemMarketConfig {
         return new ArrayList<>(Config.SYSTEM_BUY_CATEGORIES.get().stream().map(String::valueOf).toList());
     }
 
+    private static String normalizeCategory(String type, String category) {
+        String trimmedCategory = category.trim();
+        if (!isSystemSelling(type) || !trimmedCategory.isEmpty()) {
+            return trimmedCategory;
+        }
+        List<String> categories = mutableCategories().stream()
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toList();
+        return categories.isEmpty() ? "#1" : categories.getFirst();
+    }
+
+    private static boolean isSystemSelling(String type) {
+        String trimmedType = type.trim();
+        return "sell_to_player".equalsIgnoreCase(trimmedType)
+                || "system_sells".equalsIgnoreCase(trimmedType);
+    }
+
     private static void saveOffers(List<String> offers) {
-        Config.SYSTEM_OFFERS.set(List.copyOf(offers));
+        Config.SYSTEM_OFFERS.set(deduplicateShelfItems(offers));
         Config.SPEC.save();
     }
 
@@ -109,11 +131,35 @@ public final class SystemMarketConfig {
             if (parts.length == 5 && parts[4].trim().equals(oldName)) {
                 parts[4] = newName;
                 renamed.add(String.join("|", parts));
+            } else if (parts.length == 10 && parts[3].trim().equals(oldName)) {
+                parts[3] = newName;
+                renamed.add(String.join("|", parts));
             } else {
                 renamed.add(offer);
             }
         }
         saveOffers(renamed);
+    }
+
+    private static boolean sameShelfItem(String leftLine, String rightLine) {
+        SystemMarketOffer left = SystemMarketOffer.parse(leftLine);
+        SystemMarketOffer right = SystemMarketOffer.parse(rightLine);
+        return left != null
+                && right != null
+                && left.type() == right.type()
+                && left.item().is(right.item().getItem());
+    }
+
+    private static List<String> deduplicateShelfItems(List<String> offers) {
+        List<String> result = new ArrayList<>();
+        for (String offer : offers) {
+            if (SystemMarketOffer.parse(offer) == null) {
+                continue;
+            }
+            result.removeIf(existing -> sameShelfItem(existing, offer));
+            result.add(offer);
+        }
+        return List.copyOf(result);
     }
 
     private static List<String> stringList(Object value) {

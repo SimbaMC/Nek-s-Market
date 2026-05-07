@@ -10,7 +10,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-public record MarketSystemConfigPayload(List<String> categories, List<String> offers) implements CustomPacketPayload {
+public record MarketSystemConfigPayload(List<String> categories, List<String> offers, List<String> fallbackOffers) implements CustomPacketPayload {
     public static final Type<MarketSystemConfigPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(NeksMarket.MODID, "market_system_config"));
     public static final StreamCodec<RegistryFriendlyByteBuf, MarketSystemConfigPayload> STREAM_CODEC = StreamCodec.ofMember(
             MarketSystemConfigPayload::write,
@@ -27,7 +27,12 @@ public record MarketSystemConfigPayload(List<String> categories, List<String> of
         for (int i = 0; i < offerCount; i++) {
             offers.add(buffer.readUtf(256));
         }
-        return new MarketSystemConfigPayload(List.copyOf(categories), List.copyOf(offers));
+        int fallbackOfferCount = buffer.readVarInt();
+        List<String> fallbackOffers = new ArrayList<>(fallbackOfferCount);
+        for (int i = 0; i < fallbackOfferCount; i++) {
+            fallbackOffers.add(buffer.readUtf(256));
+        }
+        return new MarketSystemConfigPayload(List.copyOf(categories), List.copyOf(offers), List.copyOf(fallbackOffers));
     }
 
     public void write(RegistryFriendlyByteBuf buffer) {
@@ -37,6 +42,10 @@ public record MarketSystemConfigPayload(List<String> categories, List<String> of
         }
         buffer.writeVarInt(offers.size());
         for (String offer : offers) {
+            buffer.writeUtf(offer, 256);
+        }
+        buffer.writeVarInt(fallbackOffers.size());
+        for (String offer : fallbackOffers) {
             buffer.writeUtf(offer, 256);
         }
     }

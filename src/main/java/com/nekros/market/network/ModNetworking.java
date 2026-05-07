@@ -17,6 +17,7 @@ import com.nekros.market.system.SystemMarketService;
 
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
@@ -41,7 +42,7 @@ public final class ModNetworking {
     }
 
     private static void handleSystemConfig(MarketSystemConfigPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
-        SystemMarketOffer.setSyncedConfig(payload.categories(), payload.offers());
+        SystemMarketOffer.setSyncedConfig(payload.categories(), payload.offers(), payload.fallbackOffers());
     }
 
     private static void handleAction(MarketActionPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
@@ -55,6 +56,7 @@ public final class ModNetworking {
             MarketService.BuyResult result = MarketService.buy(data, player, payload.listingId().get(), payload.count());
             if (result.success()) {
                 player.displayClientMessage(Component.literal("Bought " + result.listing().item().getHoverName().getString() + " x" + result.listing().count() + " for " + result.totalPrice() + " " + MarketEconomy.CURRENCY_NAME + "."), false);
+                syncInventory(player);
             } else {
                 player.displayClientMessage(Component.literal(result.message()), false);
             }
@@ -62,12 +64,16 @@ public final class ModNetworking {
             MarketService.SellResult result = MarketService.sellMainHand(data, player, payload.price(), payload.count());
             if (result.success()) {
                 player.displayClientMessage(Component.literal("Listed " + result.listing().item().getHoverName().getString() + " x" + result.listing().count() + " for " + result.listing().price() + " " + MarketEconomy.CURRENCY_NAME + " each."), false);
+                syncInventory(player);
             } else {
                 player.displayClientMessage(Component.literal(result.message()), false);
             }
         } else if (MarketActionPayload.SYSTEM_TRADE.equals(payload.action())) {
             SystemMarketService.Result result = SystemMarketService.trade(data, player, payload.offerId(), payload.count());
             player.displayClientMessage(Component.literal(result.message()), false);
+            if (result.success()) {
+                syncInventory(player);
+            }
         }
 
         sendSnapshot(player, page);
@@ -79,7 +85,10 @@ public final class ModNetworking {
         if (player.containerMenu instanceof MarketMenu menu) {
             menu.updateSnapshot(snapshot);
         }
-        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), quotedOfferLines(player)));
+        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(
+                SystemMarketOffer.configCategoryLines(),
+                quotedOfferLines(player),
+                SystemMarketOffer.configOfferLines()));
         PacketDistributor.sendToPlayer(player, new MarketListingsPayload(snapshot));
     }
 
@@ -109,13 +118,19 @@ public final class ModNetworking {
 
         player.displayClientMessage(Component.literal(result.message()), false);
         sendSnapshot(player, 1);
-        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), quotedOfferLines(player)));
+        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(
+                SystemMarketOffer.configCategoryLines(),
+                quotedOfferLines(player),
+                SystemMarketOffer.configOfferLines()));
     }
 
     private static List<String> quotedOfferLines(ServerPlayer player) {
         List<String> lines = new ArrayList<>();
         for (SystemMarketOffer offer : SystemMarketOffer.configOffers()) {
             long unitPrice = quoteUnitPrice(player, offer);
+            if (unitPrice <= 0L) {
+                continue;
+            }
             lines.add(offer.id()
                     + "|" + configType(offer.type())
                     + "|" + BuiltInRegistries.ITEM.getKey(offer.item().getItem())
@@ -129,10 +144,22 @@ public final class ModNetworking {
         SystemTradeQuote quote = offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS
                 ? SystemPriceService.quoteSellToPlayer(player.server, offer, 1)
                 : SystemPriceService.quoteBuyFromPlayer(player.server, offer, 1);
-        return quote.allowed() && quote.unitPricePreview() > 0L ? quote.unitPricePreview() : offer.unitPrice();
+        if (quote.allowed() && quote.unitPricePreview() > 0L) {
+            return quote.unitPricePreview();
+        }
+        return offer.pricing().basePrice() > 0L ? offer.pricing().basePrice() : 0L;
     }
 
     private static String configType(SystemMarketOffer.Type type) {
         return type == SystemMarketOffer.Type.SYSTEM_SELLS ? "sell_to_player" : "buy_from_player";
+    }
+
+    private static void syncInventory(ServerPlayer player) {
+        player.getInventory().setChanged();
+        player.containerMenu.broadcastChanges();
+        player.inventoryMenu.broadcastChanges();
+        for (int slot = 0; slot < player.getInventory().getContainerSize(); slot++) {
+            player.connection.send(new ClientboundContainerSetSlotPacket(-2, 0, slot, player.getInventory().getItem(slot).copy()));
+        }
     }
 }

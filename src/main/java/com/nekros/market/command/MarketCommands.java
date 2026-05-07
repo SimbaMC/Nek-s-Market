@@ -11,21 +11,26 @@ import com.nekros.market.economy.MarketEconomy;
 import com.nekros.market.listing.MarketListing;
 import com.nekros.market.listing.MarketService;
 import com.nekros.market.menu.MarketMenuSnapshots;
+import com.nekros.market.network.ModNetworking;
 import com.nekros.market.storage.MarketSavedData;
+import com.nekros.market.storage.SystemStockSavedData;
 import com.nekros.market.system.SystemMarketConfig;
 
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.CommandBuildContext;
 import net.minecraft.commands.Commands;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.commands.arguments.item.ItemArgument;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.SimpleMenuProvider;
+import net.minecraft.core.registries.BuiltInRegistries;
 
 public final class MarketCommands {
     private MarketCommands() {
     }
 
-    public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
+    public static void register(CommandDispatcher<CommandSourceStack> dispatcher, CommandBuildContext buildContext) {
         dispatcher.register(Commands.literal("market")
                 .executes(context -> showHelp(context.getSource()))
                 .then(Commands.literal("balance")
@@ -88,7 +93,7 @@ public final class MarketCommands {
                                         IntegerArgumentType.getInteger(context, "page")))))
                 .then(Commands.literal("mine")
                         .executes(context -> mine(context.getSource())))
-                .then(PriceAdminCommands.priceCommand())
+                .then(PriceAdminCommands.priceCommand(buildContext))
                 .then(Commands.literal("expire")
                         .requires(source -> source.hasPermission(2))
                         .executes(context -> expire(context.getSource())))
@@ -96,6 +101,11 @@ public final class MarketCommands {
                         .requires(source -> source.hasPermission(2))
                         .then(Commands.literal("reload")
                                 .executes(context -> reloadSystemMarket(context.getSource())))
+                        .then(Commands.literal("stock")
+                                .then(Commands.argument("item", ItemArgument.item(buildContext))
+                                        .executes(context -> systemStock(
+                                                context.getSource(),
+                                                itemId(context, "item")))))
                         .then(Commands.literal("remove")
                                 .then(Commands.argument("id", StringArgumentType.word())
                                         .executes(context -> removeSystemOffer(
@@ -104,13 +114,13 @@ public final class MarketCommands {
                         .then(Commands.literal("add")
                                 .then(Commands.argument("id", StringArgumentType.word())
                                         .then(Commands.argument("type", StringArgumentType.word())
-                                                .then(Commands.argument("item", StringArgumentType.word())
+                                                .then(Commands.argument("item", ItemArgument.item(buildContext))
                                                         .then(Commands.argument("price", LongArgumentType.longArg(1L))
                                                                 .executes(context -> addSystemOffer(
                                                                         context.getSource(),
                                                                         StringArgumentType.getString(context, "id"),
                                                                                 StringArgumentType.getString(context, "type"),
-                                                                                StringArgumentType.getString(context, "item"),
+                                                                                itemId(context, "item"),
                                                                                 LongArgumentType.getLong(context, "price"),
                                                                                 ""))
                                                                 .then(Commands.argument("category", StringArgumentType.greedyString())
@@ -118,7 +128,7 @@ public final class MarketCommands {
                                                                                 context.getSource(),
                                                                                 StringArgumentType.getString(context, "id"),
                                                                                 StringArgumentType.getString(context, "type"),
-                                                                                StringArgumentType.getString(context, "item"),
+                                                                                itemId(context, "item"),
                                                                                 LongArgumentType.getLong(context, "price"),
                                                                                 StringArgumentType.getString(context, "category")))))))))));
     }
@@ -134,6 +144,7 @@ public final class MarketCommands {
                                     MarketMenuSnapshots.create(data, player, 1)),
                             Component.literal("Nek's Market")),
                     buffer -> MarketMenuSnapshots.create(data, player, 1).write(buffer));
+            ModNetworking.sendSnapshot(player, 1);
             return 1;
         } catch (com.mojang.brigadier.exceptions.CommandSyntaxException ignored) {
             source.sendSuccess(() -> Component.literal("Nek's Market commands: /market listings, /market sell <price>, /market buy <id>, /market claim, /market balance"), false);
@@ -277,6 +288,23 @@ public final class MarketCommands {
             return 0;
         }
         source.sendSuccess(() -> Component.literal(result.message()), true);
+        if (source.getEntity() instanceof ServerPlayer player) {
+            ModNetworking.sendSnapshot(player, 1);
+        }
+        return 1;
+    }
+
+    private static int systemStock(CommandSourceStack source, String itemText) {
+        net.minecraft.resources.ResourceLocation itemId = net.minecraft.resources.ResourceLocation.tryParse(itemText);
+        if (itemId == null) {
+            source.sendFailure(Component.literal("Invalid item id: " + itemText));
+            return 0;
+        }
+        SystemStockSavedData stock = SystemStockSavedData.get(source.getServer());
+        source.sendSuccess(() -> Component.literal("System stock for " + itemId + ":"), false);
+        source.sendSuccess(() -> Component.literal("Actual Stock: " + stock.actualStock(itemId)), false);
+        source.sendSuccess(() -> Component.literal("Total Bought From Players: " + stock.totalBought(itemId)), false);
+        source.sendSuccess(() -> Component.literal("Total Sold To Players: " + stock.totalSold(itemId)), false);
         return 1;
     }
 
@@ -317,6 +345,10 @@ public final class MarketCommands {
 
     private static String itemName(MarketListing listing) {
         return listing.item().getHoverName().getString();
+    }
+
+    private static String itemId(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context, String name) {
+        return BuiltInRegistries.ITEM.getKey(ItemArgument.getItem(context, name).getItem()).toString();
     }
 
     private static String shortId(UUID id) {

@@ -42,6 +42,12 @@ public class EconomySavedData extends SavedData {
         return List.copyOf(tradesByItem.getOrDefault(itemId.toString(), List.of()));
     }
 
+    public List<MarketTradeRecord> recentTradesFor(ResourceLocation itemId, int limit) {
+        List<MarketTradeRecord> records = tradesByItem.getOrDefault(itemId.toString(), List.of());
+        int fromIndex = Math.max(0, records.size() - Math.max(0, limit));
+        return List.copyOf(records.subList(fromIndex, records.size()));
+    }
+
     @Override
     public CompoundTag save(CompoundTag tag, HolderLookup.Provider registries) {
         ListTag trades = new ListTag();
