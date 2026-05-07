@@ -1,0 +1,9 @@
+{
+  "neksmarket.configuration.title": "Nek's Market Configs",
+  "neksmarket.configuration.section.neksmarket.common.toml": "Nek's Market Configs",
+  "neksmarket.configuration.section.neksmarket.common.toml.title": "Nek's Market Configs",
+  "neksmarket.configuration.defaultListingDurationHours": "Default Listing Duration Hours",
+  "neksmarket.configuration.listingFeeEnabled": "Enable Listing Fee",
+  "neksmarket.configuration.listingFeeFlat": "Flat Listing Fee",
+  "neksmarket.configuration.listingFeePercent": "Listing Fee Percent"
+}

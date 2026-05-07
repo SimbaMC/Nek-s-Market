@@ -1,0 +1,70 @@
+package com.nekros.market.network;
+
+import com.nekros.market.economy.MarketEconomy;
+import com.nekros.market.listing.MarketService;
+import com.nekros.market.menu.MarketMenu;
+import com.nekros.market.menu.MarketMenuSnapshot;
+import com.nekros.market.menu.MarketMenuSnapshots;
+import com.nekros.market.storage.MarketSavedData;
+import com.nekros.market.system.SystemMarketService;
+
+import net.minecraft.network.chat.Component;
+import net.minecraft.server.level.ServerPlayer;
+import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.network.registration.PayloadRegistrar;
+
+public final class ModNetworking {
+    private ModNetworking() {
+    }
+
+    public static void register(RegisterPayloadHandlersEvent event) {
+        PayloadRegistrar registrar = event.registrar("1");
+        registrar.playToClient(MarketListingsPayload.TYPE, MarketListingsPayload.STREAM_CODEC, ModNetworking::handleListings);
+        registrar.playToServer(MarketActionPayload.TYPE, MarketActionPayload.STREAM_CODEC, ModNetworking::handleAction);
+    }
+
+    private static void handleListings(MarketListingsPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
+        if (context.player().containerMenu instanceof MarketMenu menu) {
+            menu.updateSnapshot(payload.snapshot());
+        }
+    }
+
+    private static void handleAction(MarketActionPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
+        if (!(context.player() instanceof ServerPlayer player)) {
+            return;
+        }
+
+        MarketSavedData data = MarketSavedData.get(player.server);
+        int page = Math.max(1, payload.page());
+        if (MarketActionPayload.BUY.equals(payload.action()) && payload.listingId().isPresent()) {
+            MarketService.BuyResult result = MarketService.buy(data, player, payload.listingId().get(), payload.count());
+            if (result.success()) {
+                player.displayClientMessage(Component.literal("Bought " + result.listing().item().getHoverName().getString() + " x" + result.listing().count() + " for " + result.totalPrice() + " " + MarketEconomy.CURRENCY_NAME + "."), false);
+            } else {
+                player.displayClientMessage(Component.literal(result.message()), false);
+            }
+        } else if (MarketActionPayload.SELL.equals(payload.action())) {
+            MarketService.SellResult result = MarketService.sellMainHand(data, player, payload.price(), payload.count());
+            if (result.success()) {
+                player.displayClientMessage(Component.literal("Listed " + result.listing().item().getHoverName().getString() + " x" + result.listing().count() + " for " + result.listing().price() + " " + MarketEconomy.CURRENCY_NAME + " each."), false);
+            } else {
+                player.displayClientMessage(Component.literal(result.message()), false);
+            }
+        } else if (MarketActionPayload.SYSTEM_TRADE.equals(payload.action())) {
+            SystemMarketService.Result result = SystemMarketService.trade(data, player, payload.offerId(), payload.count());
+            player.displayClientMessage(Component.literal(result.message()), false);
+        }
+
+        sendSnapshot(player, page);
+    }
+
+    public static void sendSnapshot(ServerPlayer player, int page) {
+        MarketSavedData data = MarketSavedData.get(player.server);
+        MarketMenuSnapshot snapshot = MarketMenuSnapshots.create(data, player, page);
+        if (player.containerMenu instanceof MarketMenu menu) {
+            menu.updateSnapshot(snapshot);
+        }
+        PacketDistributor.sendToPlayer(player, new MarketListingsPayload(snapshot));
+    }
+}
