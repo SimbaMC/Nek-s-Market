@@ -1,6 +1,7 @@
 package com.nekros.market.menu;
 
 import java.util.List;
+import java.util.Comparator;
 
 import com.nekros.market.economy.MarketEconomy;
 import com.nekros.market.listing.MarketListing;
@@ -14,12 +15,12 @@ public final class MarketMenuSnapshots {
     }
 
     public static MarketMenuSnapshot create(MarketSavedData data, ServerPlayer player, int page) {
-        int pageCount = MarketService.pageCount(data);
-        int clampedPage = Math.max(1, Math.min(page, pageCount));
-        List<MarketMenuEntry> entries = MarketService.page(data, clampedPage).stream()
+        MarketService.expireListings(data);
+        List<MarketMenuEntry> entries = data.listings().values().stream()
+                .sorted(Comparator.comparingLong(MarketListing::createdAt).reversed())
                 .map(MarketMenuSnapshots::entry)
                 .toList();
-        return new MarketMenuSnapshot(clampedPage, pageCount, MarketEconomy.balance(data, player.getUUID()), entries);
+        return new MarketMenuSnapshot(1, 1, MarketEconomy.balance(data, player.getUUID()), entries);
     }
 
     private static MarketMenuEntry entry(MarketListing listing) {

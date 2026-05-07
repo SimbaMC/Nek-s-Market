@@ -12,6 +12,7 @@ import com.nekros.market.listing.MarketListing;
 import com.nekros.market.listing.MarketService;
 import com.nekros.market.menu.MarketMenuSnapshots;
 import com.nekros.market.storage.MarketSavedData;
+import com.nekros.market.system.SystemMarketConfig;
 
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -89,7 +90,36 @@ public final class MarketCommands {
                         .executes(context -> mine(context.getSource())))
                 .then(Commands.literal("expire")
                         .requires(source -> source.hasPermission(2))
-                        .executes(context -> expire(context.getSource()))));
+                        .executes(context -> expire(context.getSource())))
+                .then(Commands.literal("system")
+                        .requires(source -> source.hasPermission(2))
+                        .then(Commands.literal("reload")
+                                .executes(context -> reloadSystemMarket(context.getSource())))
+                        .then(Commands.literal("remove")
+                                .then(Commands.argument("id", StringArgumentType.word())
+                                        .executes(context -> removeSystemOffer(
+                                                context.getSource(),
+                                                StringArgumentType.getString(context, "id")))))
+                        .then(Commands.literal("add")
+                                .then(Commands.argument("id", StringArgumentType.word())
+                                        .then(Commands.argument("type", StringArgumentType.word())
+                                                .then(Commands.argument("item", StringArgumentType.word())
+                                                        .then(Commands.argument("price", LongArgumentType.longArg(1L))
+                                                                .executes(context -> addSystemOffer(
+                                                                        context.getSource(),
+                                                                        StringArgumentType.getString(context, "id"),
+                                                                        StringArgumentType.getString(context, "type"),
+                                                                        StringArgumentType.getString(context, "item"),
+                                                                        LongArgumentType.getLong(context, "price"),
+                                                                        ""))
+                                                                .then(Commands.argument("category", StringArgumentType.word())
+                                                                        .executes(context -> addSystemOffer(
+                                                                                context.getSource(),
+                                                                                StringArgumentType.getString(context, "id"),
+                                                                                StringArgumentType.getString(context, "type"),
+                                                                                StringArgumentType.getString(context, "item"),
+                                                                                LongArgumentType.getLong(context, "price"),
+                                                                                StringArgumentType.getString(context, "category")))))))))));
     }
 
     private static int showHelp(CommandSourceStack source) {
@@ -237,6 +267,36 @@ public final class MarketCommands {
         int expired = MarketService.expireListings(data);
         source.sendSuccess(() -> Component.literal("Expired " + expired + " listing(s)."), true);
         return expired;
+    }
+
+    private static int reloadSystemMarket(CommandSourceStack source) {
+        SystemMarketConfig.Result result = SystemMarketConfig.reload();
+        if (!result.success()) {
+            source.sendFailure(Component.literal(result.message()));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal(result.message()), true);
+        return 1;
+    }
+
+    private static int addSystemOffer(CommandSourceStack source, String id, String type, String item, long price, String category) {
+        SystemMarketConfig.Result result = SystemMarketConfig.addOffer(id, type, item, price, category);
+        if (!result.success()) {
+            source.sendFailure(Component.literal(result.message()));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal(result.message()), true);
+        return 1;
+    }
+
+    private static int removeSystemOffer(CommandSourceStack source, String id) {
+        SystemMarketConfig.Result result = SystemMarketConfig.removeOffer(id);
+        if (!result.success()) {
+            source.sendFailure(Component.literal(result.message()));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal(result.message()), true);
+        return 1;
     }
 
     private static UUID parseListingId(CommandSourceStack source, String idText) {

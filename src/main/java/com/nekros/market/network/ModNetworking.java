@@ -6,6 +6,8 @@ import com.nekros.market.menu.MarketMenu;
 import com.nekros.market.menu.MarketMenuSnapshot;
 import com.nekros.market.menu.MarketMenuSnapshots;
 import com.nekros.market.storage.MarketSavedData;
+import com.nekros.market.system.SystemMarketConfig;
+import com.nekros.market.system.SystemMarketOffer;
 import com.nekros.market.system.SystemMarketService;
 
 import net.minecraft.network.chat.Component;
@@ -21,13 +23,19 @@ public final class ModNetworking {
     public static void register(RegisterPayloadHandlersEvent event) {
         PayloadRegistrar registrar = event.registrar("1");
         registrar.playToClient(MarketListingsPayload.TYPE, MarketListingsPayload.STREAM_CODEC, ModNetworking::handleListings);
+        registrar.playToClient(MarketSystemConfigPayload.TYPE, MarketSystemConfigPayload.STREAM_CODEC, ModNetworking::handleSystemConfig);
         registrar.playToServer(MarketActionPayload.TYPE, MarketActionPayload.STREAM_CODEC, ModNetworking::handleAction);
+        registrar.playToServer(MarketAdminActionPayload.TYPE, MarketAdminActionPayload.STREAM_CODEC, ModNetworking::handleAdminAction);
     }
 
     private static void handleListings(MarketListingsPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
         if (context.player().containerMenu instanceof MarketMenu menu) {
             menu.updateSnapshot(payload.snapshot());
         }
+    }
+
+    private static void handleSystemConfig(MarketSystemConfigPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
+        SystemMarketOffer.setSyncedConfig(payload.categories(), payload.offers());
     }
 
     private static void handleAction(MarketActionPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
@@ -65,6 +73,36 @@ public final class ModNetworking {
         if (player.containerMenu instanceof MarketMenu menu) {
             menu.updateSnapshot(snapshot);
         }
+        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), SystemMarketOffer.configOfferLines()));
         PacketDistributor.sendToPlayer(player, new MarketListingsPayload(snapshot));
+    }
+
+    private static void handleAdminAction(MarketAdminActionPayload payload, net.neoforged.neoforge.network.handling.IPayloadContext context) {
+        if (!(context.player() instanceof ServerPlayer player)) {
+            return;
+        }
+        if (!player.hasPermissions(2)) {
+            player.displayClientMessage(Component.literal("You do not have permission to edit the system market."), false);
+            return;
+        }
+
+        SystemMarketConfig.Result result;
+        if (MarketAdminActionPayload.ADD.equals(payload.action())) {
+            result = SystemMarketConfig.addOffer(payload.id(), payload.offerType(), payload.itemId(), payload.price(), payload.category());
+        } else if (MarketAdminActionPayload.REMOVE.equals(payload.action())) {
+            result = SystemMarketConfig.removeOffer(payload.id());
+        } else if (MarketAdminActionPayload.RELOAD.equals(payload.action())) {
+            result = SystemMarketConfig.reload();
+        } else if (MarketAdminActionPayload.RENAME_CATEGORY.equals(payload.action())) {
+            result = SystemMarketConfig.renameCategory(payload.id(), payload.category());
+        } else if (MarketAdminActionPayload.RESET_CATEGORY.equals(payload.action())) {
+            result = SystemMarketConfig.resetCategory(payload.id());
+        } else {
+            result = new SystemMarketConfig.Result(false, "Unknown admin action.");
+        }
+
+        player.displayClientMessage(Component.literal(result.message()), false);
+        sendSnapshot(player, 1);
+        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), SystemMarketOffer.configOfferLines()));
     }
 }
