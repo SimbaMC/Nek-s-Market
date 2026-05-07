@@ -9,6 +9,7 @@ import java.util.UUID;
 import com.nekros.market.Config;
 import com.nekros.market.claim.MarketClaim;
 import com.nekros.market.economy.MarketEconomy;
+import com.nekros.market.pricing.market.MarketTradeHistoryService;
 import com.nekros.market.storage.MarketSavedData;
 import com.nekros.market.util.InventoryUtil;
 
@@ -106,6 +107,15 @@ public final class MarketService {
         InventoryUtil.addSplit(buyer.getInventory(), listing.item(), boughtCount);
         data.claimFor(listing.sellerId()).addMoney(totalPrice);
         data.setDirty();
+
+        MarketTradeHistoryService.recordPlayerTrade(
+                buyer.server,
+                buyer,
+                listing.sellerId(),
+                listing.item(),
+                listing.price(),
+                boughtCount);
+
         return BuyResult.success(listing.withCount(boughtCount), totalPrice);
     }
 

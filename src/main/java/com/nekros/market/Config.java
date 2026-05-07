@@ -40,6 +40,32 @@ public class Config {
                     "Example: sell_wheat|buy_from_player|minecraft:wheat|2|")
             .defineListAllowEmpty("systemMarket.offers", List.of(), value -> value instanceof String);
 
+    public static final ModConfigSpec.ConfigValue<List<? extends String>> PRICE_ANCHORS = BUILDER
+            .comment(
+                    "Pricing anchors.",
+                    "Format: itemId|price|tradeLevel",
+                    "Example: minecraft:iron_ingot|100|SYSTEM_BUY_AND_SELL")
+            .defineListAllowEmpty("pricing.anchors",
+                    List.of(
+                            "minecraft:oak_log|1|SYSTEM_BUY_AND_SELL",
+                            "minecraft:iron_ingot|100|SYSTEM_BUY_AND_SELL",
+                            "minecraft:gold_ingot|500|SYSTEM_BUY_AND_SELL",
+                            "minecraft:diamond|1000|SYSTEM_BUY_AND_SELL",
+                            "minecraft:netherite_ingot|10000|SYSTEM_BUY_AND_SELL"),
+                    value -> value instanceof String);
+
+    public static final ModConfigSpec.DoubleValue PRICING_DEFAULT_BUY_RATIO = BUILDER
+            .comment("Default ratio for system buying from players.")
+            .defineInRange("pricing.defaultBuyRatio", 0.65D, 0.0D, 10.0D);
+
+    public static final ModConfigSpec.DoubleValue PRICING_DEFAULT_SELL_RATIO = BUILDER
+            .comment("Default ratio for system selling to players.")
+            .defineInRange("pricing.defaultSellRatio", 1.35D, 0.0D, 10.0D);
+
+    public static final ModConfigSpec.IntValue PRICING_MARKET_CONFIDENCE_TRADE_COUNT = BUILDER
+            .comment("Recent trade count required for full player market confidence.")
+            .defineInRange("pricing.marketConfidenceTradeCount", 30, 1, 10000);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     public static long defaultListingDurationMillis() {

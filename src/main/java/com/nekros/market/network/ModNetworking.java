@@ -1,15 +1,21 @@
 package com.nekros.market.network;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import com.nekros.market.economy.MarketEconomy;
 import com.nekros.market.listing.MarketService;
 import com.nekros.market.menu.MarketMenu;
 import com.nekros.market.menu.MarketMenuSnapshot;
 import com.nekros.market.menu.MarketMenuSnapshots;
+import com.nekros.market.pricing.system.SystemPriceService;
+import com.nekros.market.pricing.system.SystemTradeQuote;
 import com.nekros.market.storage.MarketSavedData;
 import com.nekros.market.system.SystemMarketConfig;
 import com.nekros.market.system.SystemMarketOffer;
 import com.nekros.market.system.SystemMarketService;
 
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.neoforged.neoforge.network.PacketDistributor;
@@ -73,7 +79,7 @@ public final class ModNetworking {
         if (player.containerMenu instanceof MarketMenu menu) {
             menu.updateSnapshot(snapshot);
         }
-        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), SystemMarketOffer.configOfferLines()));
+        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), quotedOfferLines(player)));
         PacketDistributor.sendToPlayer(player, new MarketListingsPayload(snapshot));
     }
 
@@ -103,6 +109,30 @@ public final class ModNetworking {
 
         player.displayClientMessage(Component.literal(result.message()), false);
         sendSnapshot(player, 1);
-        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), SystemMarketOffer.configOfferLines()));
+        PacketDistributor.sendToPlayer(player, new MarketSystemConfigPayload(SystemMarketOffer.configCategoryLines(), quotedOfferLines(player)));
+    }
+
+    private static List<String> quotedOfferLines(ServerPlayer player) {
+        List<String> lines = new ArrayList<>();
+        for (SystemMarketOffer offer : SystemMarketOffer.configOffers()) {
+            long unitPrice = quoteUnitPrice(player, offer);
+            lines.add(offer.id()
+                    + "|" + configType(offer.type())
+                    + "|" + BuiltInRegistries.ITEM.getKey(offer.item().getItem())
+                    + "|" + unitPrice
+                    + "|" + offer.buyCategory());
+        }
+        return List.copyOf(lines);
+    }
+
+    private static long quoteUnitPrice(ServerPlayer player, SystemMarketOffer offer) {
+        SystemTradeQuote quote = offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS
+                ? SystemPriceService.quoteSellToPlayer(player.server, offer, 1)
+                : SystemPriceService.quoteBuyFromPlayer(player.server, offer, 1);
+        return quote.allowed() && quote.unitPricePreview() > 0L ? quote.unitPricePreview() : offer.unitPrice();
+    }
+
+    private static String configType(SystemMarketOffer.Type type) {
+        return type == SystemMarketOffer.Type.SYSTEM_SELLS ? "sell_to_player" : "buy_from_player";
     }
 }

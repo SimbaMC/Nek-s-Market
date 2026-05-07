@@ -88,6 +88,7 @@ public final class MarketCommands {
                                         IntegerArgumentType.getInteger(context, "page")))))
                 .then(Commands.literal("mine")
                         .executes(context -> mine(context.getSource())))
+                .then(PriceAdminCommands.priceCommand())
                 .then(Commands.literal("expire")
                         .requires(source -> source.hasPermission(2))
                         .executes(context -> expire(context.getSource())))
@@ -108,11 +109,11 @@ public final class MarketCommands {
                                                                 .executes(context -> addSystemOffer(
                                                                         context.getSource(),
                                                                         StringArgumentType.getString(context, "id"),
-                                                                        StringArgumentType.getString(context, "type"),
-                                                                        StringArgumentType.getString(context, "item"),
-                                                                        LongArgumentType.getLong(context, "price"),
-                                                                        ""))
-                                                                .then(Commands.argument("category", StringArgumentType.word())
+                                                                                StringArgumentType.getString(context, "type"),
+                                                                                StringArgumentType.getString(context, "item"),
+                                                                                LongArgumentType.getLong(context, "price"),
+                                                                                ""))
+                                                                .then(Commands.argument("category", StringArgumentType.greedyString())
                                                                         .executes(context -> addSystemOffer(
                                                                                 context.getSource(),
                                                                                 StringArgumentType.getString(context, "id"),

@@ -1,6 +1,8 @@
 package com.nekros.market.system;
 
 import com.nekros.market.economy.MarketEconomy;
+import com.nekros.market.pricing.system.SystemPriceService;
+import com.nekros.market.pricing.system.SystemTradeQuote;
 import com.nekros.market.storage.MarketSavedData;
 import com.nekros.market.util.InventoryUtil;
 
@@ -20,12 +22,17 @@ public final class SystemMarketService {
             return Result.fail("That system offer no longer exists.");
         }
 
-        long totalPrice;
-        try {
-            totalPrice = Math.multiplyExact(offer.unitPrice(), count);
-        } catch (ArithmeticException exception) {
-            return Result.fail("Total price is too large.");
+        SystemTradeQuote quote;
+        if (offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS) {
+            quote = SystemPriceService.quoteSellToPlayer(player.server, offer, count);
+        } else {
+            quote = SystemPriceService.quoteBuyFromPlayer(player.server, offer, count);
         }
+
+        if (!quote.allowed()) {
+            return Result.fail(quote.message());
+        }
+        long totalPrice = quote.totalPrice();
 
         if (offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS) {
             if (!InventoryUtil.canFit(player.getInventory(), offer.item(), count)) {
