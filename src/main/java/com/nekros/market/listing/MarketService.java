@@ -30,29 +30,29 @@ public final class MarketService {
 
     public static SellResult sellMainHand(MarketSavedData data, ServerPlayer seller, long price, int count) {
         if (price <= 0L) {
-            return SellResult.fail("Price must be positive.");
+            return SellResult.fail("价格必须大于 0。");
         }
         if (count <= 0) {
-            return SellResult.fail("Count must be positive.");
+            return SellResult.fail("数量必须大于 0。");
         }
 
         ItemStack selected = seller.getInventory().getSelected();
         if (selected.isEmpty()) {
-            return SellResult.fail("Hold the item you want to sell in your main hand.");
+            return SellResult.fail("请把要出售的物品拿在主手。");
         }
         ItemStack template = selected.copyWithCount(1);
         int available = InventoryUtil.countMatching(seller.getInventory(), template);
         if (count > available) {
-            return SellResult.fail("You only have " + available + " matching item(s) in your inventory.");
+            return SellResult.fail("你的背包里只有 " + available + " 个匹配物品。");
         }
 
         long fee = Config.listingFee(price);
         if (fee > 0L && !MarketEconomy.withdraw(data, seller.getUUID(), fee)) {
-            return SellResult.fail("You need " + fee + " " + MarketEconomy.CURRENCY_NAME + " for the listing fee.");
+            return SellResult.fail("上架费需要 " + fee + " " + MarketEconomy.CURRENCY_NAME + "。");
         }
 
         if (!InventoryUtil.removeMatching(seller.getInventory(), template, count)) {
-            return SellResult.fail("Could not remove the selected item from your inventory.");
+            return SellResult.fail("无法从背包移除选中的物品。");
         }
         long now = System.currentTimeMillis();
         UUID id = UUID.randomUUID();
@@ -79,23 +79,23 @@ public final class MarketService {
 
         MarketListing listing = data.listings().get(listingId);
         if (listing == null) {
-            return BuyResult.fail("That listing no longer exists.");
+            return BuyResult.fail("该挂单已不存在。");
         }
         if (count <= 0) {
-            return BuyResult.fail("Count must be positive.");
+            return BuyResult.fail("数量必须大于 0。");
         }
         int boughtCount = Math.min(count, listing.count());
         if (!InventoryUtil.canFit(buyer.getInventory(), listing.item(), boughtCount)) {
-            return BuyResult.fail("You do not have enough inventory space.");
+            return BuyResult.fail("背包空间不足。");
         }
         long totalPrice;
         try {
             totalPrice = Math.multiplyExact(listing.price(), boughtCount);
         } catch (ArithmeticException exception) {
-            return BuyResult.fail("Total price is too large.");
+            return BuyResult.fail("总价过大。");
         }
         if (!MarketEconomy.withdraw(data, buyer.getUUID(), totalPrice)) {
-            return BuyResult.fail("You do not have enough " + MarketEconomy.CURRENCY_NAME + ".");
+            return BuyResult.fail("你的 " + MarketEconomy.CURRENCY_NAME + " 不足。");
         }
 
         int remainingCount = listing.count() - boughtCount;
@@ -124,10 +124,10 @@ public final class MarketService {
 
         MarketListing listing = data.listings().get(listingId);
         if (listing == null) {
-            return CancelResult.fail("That listing no longer exists.");
+            return CancelResult.fail("该挂单已不存在。");
         }
         if (!listing.sellerId().equals(seller.getUUID()) && !seller.hasPermissions(2)) {
-            return CancelResult.fail("You can only cancel your own listings.");
+            return CancelResult.fail("只能取消自己的挂单。");
         }
 
         data.listings().remove(listingId);

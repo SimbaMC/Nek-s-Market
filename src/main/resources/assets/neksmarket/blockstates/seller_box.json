@@ -1,0 +1,31 @@
+{
+  "variants": {
+    "facing=north,half=lower": {
+      "model": "neksmarket:block/seller_box"
+    },
+    "facing=east,half=lower": {
+      "model": "neksmarket:block/seller_box",
+      "y": 90
+    },
+    "facing=south,half=lower": {
+      "model": "neksmarket:block/seller_box",
+      "y": 180
+    },
+    "facing=west,half=lower": {
+      "model": "neksmarket:block/seller_box",
+      "y": 270
+    },
+    "facing=north,half=upper": {
+      "model": "neksmarket:block/seller_box_upper"
+    },
+    "facing=east,half=upper": {
+      "model": "neksmarket:block/seller_box_upper"
+    },
+    "facing=south,half=upper": {
+      "model": "neksmarket:block/seller_box_upper"
+    },
+    "facing=west,half=upper": {
+      "model": "neksmarket:block/seller_box_upper"
+    }
+  }
+}

@@ -2,9 +2,12 @@ package com.nekros.market.pricing;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 
 import com.nekros.market.Config;
 import com.nekros.market.NeksMarket;
+import com.nekros.market.pricing.derived.DerivedPriceService;
+import com.nekros.market.pricing.derived.NaturalPriceSource;
 
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -19,6 +22,14 @@ public final class PriceRegistry {
 
     public static void reload() {
         ANCHORS.clear();
+        DerivedPriceService.clearCache();
+        NaturalPriceSource.clearCache();
+        for (String line : builtInAnchors()) {
+            PriceProfile profile = parseAnchor(line);
+            if (profile != null) {
+                ANCHORS.put(profile.itemId(), profile);
+            }
+        }
         for (String line : Config.PRICE_ANCHORS.get().stream().map(String::valueOf).toList()) {
             PriceProfile profile = parseAnchor(line);
             if (profile != null) {
@@ -37,10 +48,35 @@ public final class PriceRegistry {
         return get(BuiltInRegistries.ITEM.getKey(stack.getItem()));
     }
 
+    public static Set<ResourceLocation> anchorIds() {
+        ensureLoaded();
+        return Set.copyOf(ANCHORS.keySet());
+    }
+
     private static void ensureLoaded() {
         if (!loaded) {
             reload();
         }
+    }
+
+    private static java.util.List<String> builtInAnchors() {
+        return java.util.List.of(
+                "minecraft:oak_log|1|SYSTEM_BUY_AND_SELL",
+                "minecraft:sand|2|SYSTEM_BUY_AND_SELL",
+                "minecraft:red_sand|2|SYSTEM_BUY_AND_SELL",
+                "minecraft:beef|20|SYSTEM_BUY_AND_SELL",
+                "minecraft:porkchop|20|SYSTEM_BUY_AND_SELL",
+                "minecraft:chicken|15|SYSTEM_BUY_AND_SELL",
+                "minecraft:mutton|18|SYSTEM_BUY_AND_SELL",
+                "minecraft:rabbit|18|SYSTEM_BUY_AND_SELL",
+                "minecraft:cod|12|SYSTEM_BUY_AND_SELL",
+                "minecraft:salmon|16|SYSTEM_BUY_AND_SELL",
+                "minecraft:potato|5|SYSTEM_BUY_AND_SELL",
+                "minecraft:kelp|2|SYSTEM_BUY_AND_SELL",
+                "minecraft:iron_ingot|100|SYSTEM_BUY_AND_SELL",
+                "minecraft:gold_ingot|500|SYSTEM_BUY_AND_SELL",
+                "minecraft:diamond|1000|SYSTEM_BUY_AND_SELL",
+                "minecraft:netherite_ingot|10000|SYSTEM_BUY_AND_SELL");
     }
 
     private static PriceProfile parseAnchor(String line) {
@@ -69,7 +105,7 @@ public final class PriceRegistry {
                 price,
                 0L,
                 0L,
-                "Anchor price.");
+                "锚定价格。");
     }
 
     private static long parsePrice(String value, String line) {

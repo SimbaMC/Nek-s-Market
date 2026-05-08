@@ -13,7 +13,9 @@ import com.nekros.market.menu.MarketMenuEntry;
 import com.nekros.market.menu.MarketMenuSnapshot;
 import com.nekros.market.network.MarketAdminActionPayload;
 import com.nekros.market.network.MarketActionPayload;
+import com.nekros.market.system.PriceMode;
 import com.nekros.market.system.SystemMarketOffer;
+import com.nekros.market.system.SystemOfferPricing;
 import com.nekros.market.util.InventoryUtil;
 
 import net.minecraft.client.gui.GuiGraphics;
@@ -55,6 +57,8 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
     private Button adminReloadButton;
     private Button adminAddCategoryButton;
     private Button adminRemoveCategoryButton;
+    private Button adminPriceModeButton;
+    private Button adminInfiniteStockButton;
     private final List<Button> systemTradeButtons = new ArrayList<>();
     private final List<Button> systemCategoryButtons = new ArrayList<>();
     private final List<Button> adminCategorySlotButtons = new ArrayList<>();
@@ -64,6 +68,9 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
     private EditBox adminIdBox;
     private EditBox adminItemBox;
     private EditBox adminPriceBox;
+    private EditBox adminMultiplierBox;
+    private EditBox adminMinPriceBox;
+    private EditBox adminMaxPriceBox;
     private EditBox adminOfferCategoryBox;
     private EditBox adminCategoryNameBox;
     private MarketMenuEntry selectedBuyEntry;
@@ -81,6 +88,8 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
     private int selectedAdminCategorySlot;
     private Item selectedAdminItem;
     private boolean adminSellOfferMode;
+    private PriceMode adminPriceMode = PriceMode.AUTO;
+    private boolean adminInfiniteStock;
     private List<Item> adminAllItems;
     private List<Item> adminFilteredItems = List.of();
     private String adminLastSearch = "";
@@ -107,28 +116,28 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
 
         for (int i = 0; i < MAX_MARKET_BUTTONS; i++) {
             final int row = i;
-            Button button = Button.builder(Component.literal("Buy"), ignored -> buy(row))
+            Button button = Button.builder(Component.literal("购买"), ignored -> buy(row))
                     .bounds(leftPos + 202 + (i % 2) * 236, topPos + 70 + (i / 2) * 42, 42, 16)
                     .build();
             buyButtons.add(addRenderableWidget(button));
         }
 
-        listTabButton = addRenderableWidget(Button.builder(Component.literal("Market"), ignored -> setSellMode(false))
+        listTabButton = addRenderableWidget(Button.builder(Component.literal("交易行"), ignored -> setSellMode(false))
                 .bounds(leftPos + 14, topPos + 274, 58, 16)
                 .build());
-        sellTabButton = addRenderableWidget(Button.builder(Component.literal("Sell"), ignored -> setSellMode(true))
+        sellTabButton = addRenderableWidget(Button.builder(Component.literal("上架"), ignored -> setSellMode(true))
                 .bounds(leftPos + 78, topPos + 274, 38, 16)
                 .build());
-        systemTabButton = addRenderableWidget(Button.builder(Component.literal("System"), ignored -> setSystemMode(true))
+        systemTabButton = addRenderableWidget(Button.builder(Component.literal("系统商店"), ignored -> setSystemMode(true))
                 .bounds(leftPos + 122, topPos + 274, 56, 16)
                 .build());
-        adminTabButton = addRenderableWidget(Button.builder(Component.literal("Admin"), ignored -> setAdminMode(true))
+        adminTabButton = addRenderableWidget(Button.builder(Component.literal("管理"), ignored -> setAdminMode(true))
                 .bounds(leftPos + 184, topPos + 274, 48, 16)
                 .build());
-        systemBuyTabButton = addRenderableWidget(Button.builder(Component.literal("Buy"), ignored -> setSystemSellPage(false))
+        systemBuyTabButton = addRenderableWidget(Button.builder(Component.literal("购买"), ignored -> setSystemSellPage(false))
                 .bounds(leftPos + 30, topPos + 36, 64, 18)
                 .build());
-        systemSellTabButton = addRenderableWidget(Button.builder(Component.literal("Sell"), ignored -> setSystemSellPage(true))
+        systemSellTabButton = addRenderableWidget(Button.builder(Component.literal("出售"), ignored -> setSystemSellPage(true))
                 .bounds(leftPos + 108, topPos + 36, 64, 18)
                 .build());
         for (int i = 0; i < MAX_CATEGORY_BUTTONS; i++) {
@@ -142,76 +151,94 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         previousButton = addRenderableWidget(Button.builder(Component.literal("<"), ignored -> changePage(-1))
                 .bounds(leftPos + 356, topPos + 274, 28, 16)
                 .build());
-        refreshButton = addRenderableWidget(Button.builder(Component.literal("Refresh"), ignored -> refresh())
+        refreshButton = addRenderableWidget(Button.builder(Component.literal("刷新"), ignored -> refresh())
                 .bounds(leftPos + 390, topPos + 274, 58, 16)
                 .build());
         nextButton = addRenderableWidget(Button.builder(Component.literal(">"), ignored -> changePage(1))
                 .bounds(leftPos + 454, topPos + 274, 28, 16)
                 .build());
-        priceBox = addRenderableWidget(new EditBox(font, 0, 0, 96, 18, Component.literal("Price")));
-        priceBox.setHint(Component.literal("Price"));
+        priceBox = addRenderableWidget(new EditBox(font, 0, 0, 96, 18, Component.literal("价格")));
+        priceBox.setHint(Component.literal("价格"));
         priceBox.setMaxLength(18);
         priceBox.setFilter(value -> value.isEmpty() || value.chars().allMatch(Character::isDigit));
 
-        countBox = addRenderableWidget(new EditBox(font, 0, 0, 96, 18, Component.literal("Count")));
-        countBox.setHint(Component.literal("Count"));
+        countBox = addRenderableWidget(new EditBox(font, 0, 0, 96, 18, Component.literal("数量")));
+        countBox.setHint(Component.literal("数量"));
         countBox.setMaxLength(6);
         countBox.setFilter(value -> value.isEmpty() || value.chars().allMatch(Character::isDigit));
         countBox.setResponder(ignored -> clampCountBox());
 
-        buyCountBox = addRenderableWidget(new EditBox(font, 0, 0, 76, 18, Component.literal("Buy Count")));
+        buyCountBox = addRenderableWidget(new EditBox(font, 0, 0, 76, 18, Component.literal("数量")));
         buyCountBox.setHint(Component.literal("1"));
         buyCountBox.setMaxLength(6);
         buyCountBox.setValue("1");
         buyCountBox.setFilter(value -> value.isEmpty() || value.chars().allMatch(Character::isDigit));
         buyCountBox.setResponder(ignored -> clampBuyCountBox());
 
-        adminIdBox = addRenderableWidget(new EditBox(font, 0, 0, 120, 18, Component.literal("Offer ID")));
+        adminIdBox = addRenderableWidget(new EditBox(font, 0, 0, 120, 18, Component.literal("货架ID")));
         adminIdBox.setHint(Component.literal("id"));
         adminIdBox.setMaxLength(64);
-        adminItemBox = addRenderableWidget(new EditBox(font, 0, 0, 150, 18, Component.literal("Item ID")));
-        adminItemBox.setHint(Component.literal("Search item"));
+        adminItemBox = addRenderableWidget(new EditBox(font, 0, 0, 150, 18, Component.literal("物品ID")));
+        adminItemBox.setHint(Component.literal("搜索物品"));
         adminItemBox.setMaxLength(128);
-        adminPriceBox = addRenderableWidget(new EditBox(font, 0, 0, 80, 18, Component.literal("Price")));
-        adminPriceBox.setHint(Component.literal("price"));
+        adminPriceBox = addRenderableWidget(new EditBox(font, 0, 0, 80, 18, Component.literal("基准价")));
+        adminPriceBox.setHint(Component.literal("基准"));
         adminPriceBox.setMaxLength(18);
         adminPriceBox.setFilter(value -> value.isEmpty() || value.chars().allMatch(Character::isDigit));
-        adminOfferCategoryBox = addRenderableWidget(new EditBox(font, 0, 0, 80, 18, Component.literal("Offer Category")));
+        adminMultiplierBox = addRenderableWidget(new EditBox(font, 0, 0, 80, 18, Component.literal("倍率")));
+        adminMultiplierBox.setHint(Component.literal("1.0"));
+        adminMultiplierBox.setMaxLength(8);
+        adminMultiplierBox.setFilter(MarketScreen::isDecimalInput);
+        adminMinPriceBox = addRenderableWidget(new EditBox(font, 0, 0, 80, 18, Component.literal("最低价")));
+        adminMinPriceBox.setHint(Component.literal("最低"));
+        adminMinPriceBox.setMaxLength(18);
+        adminMinPriceBox.setFilter(value -> value.isEmpty() || value.chars().allMatch(Character::isDigit));
+        adminMaxPriceBox = addRenderableWidget(new EditBox(font, 0, 0, 80, 18, Component.literal("最高价")));
+        adminMaxPriceBox.setHint(Component.literal("最高"));
+        adminMaxPriceBox.setMaxLength(18);
+        adminMaxPriceBox.setFilter(value -> value.isEmpty() || value.chars().allMatch(Character::isDigit));
+        adminOfferCategoryBox = addRenderableWidget(new EditBox(font, 0, 0, 80, 18, Component.literal("分类")));
         adminOfferCategoryBox.setHint(Component.literal("#1"));
         adminOfferCategoryBox.setMaxLength(64);
-        adminCategoryNameBox = addRenderableWidget(new EditBox(font, 0, 0, 90, 18, Component.literal("Category Name")));
-        adminCategoryNameBox.setHint(Component.literal("Category name"));
+        adminCategoryNameBox = addRenderableWidget(new EditBox(font, 0, 0, 90, 18, Component.literal("分类名")));
+        adminCategoryNameBox.setHint(Component.literal("分类名"));
         adminCategoryNameBox.setMaxLength(64);
 
-        submitSellButton = addRenderableWidget(Button.builder(Component.literal("List Item"), ignored -> submitSell())
+        submitSellButton = addRenderableWidget(Button.builder(Component.literal("上架"), ignored -> submitSell())
                 .bounds(0, 0, 96, 18)
                 .build());
-        confirmBuyButton = addRenderableWidget(Button.builder(Component.literal("Confirm"), ignored -> confirmTrade())
+        confirmBuyButton = addRenderableWidget(Button.builder(Component.literal("确认"), ignored -> confirmTrade())
                 .bounds(0, 0, 82, 18)
                 .build());
-        cancelBuyButton = addRenderableWidget(Button.builder(Component.literal("Cancel"), ignored -> closeConfirmation())
+        cancelBuyButton = addRenderableWidget(Button.builder(Component.literal("取消"), ignored -> closeConfirmation())
                 .bounds(0, 0, 82, 18)
                 .build());
-        adminAddBuyButton = addRenderableWidget(Button.builder(Component.literal("Add Buy"), ignored -> submitAdminOffer("sell_to_player"))
+        adminAddBuyButton = addRenderableWidget(Button.builder(Component.literal("加购买"), ignored -> submitAdminOffer("sell_to_player"))
                 .bounds(0, 0, 70, 18)
                 .build());
-        adminAddSellButton = addRenderableWidget(Button.builder(Component.literal("Add Sell"), ignored -> submitAdminOffer("buy_from_player"))
+        adminAddSellButton = addRenderableWidget(Button.builder(Component.literal("加回收"), ignored -> submitAdminOffer("buy_from_player"))
                 .bounds(0, 0, 70, 18)
                 .build());
-        adminRemoveButton = addRenderableWidget(Button.builder(Component.literal("Remove Buy"), ignored -> removeAdminOffer())
+        adminRemoveButton = addRenderableWidget(Button.builder(Component.literal("删购买"), ignored -> removeAdminOffer())
                 .bounds(0, 0, 82, 18)
                 .build());
-        adminRemoveSellButton = addRenderableWidget(Button.builder(Component.literal("Remove Sell"), ignored -> removeAdminSellOffer())
+        adminRemoveSellButton = addRenderableWidget(Button.builder(Component.literal("删回收"), ignored -> removeAdminSellOffer())
                 .bounds(0, 0, 86, 18)
                 .build());
-        adminReloadButton = addRenderableWidget(Button.builder(Component.literal("Reload Config"), ignored -> reloadAdminConfig())
+        adminReloadButton = addRenderableWidget(Button.builder(Component.literal("重载配置"), ignored -> reloadAdminConfig())
                 .bounds(0, 0, 100, 18)
                 .build());
-        adminAddCategoryButton = addRenderableWidget(Button.builder(Component.literal("Rename Cat"), ignored -> renameAdminCategory())
+        adminAddCategoryButton = addRenderableWidget(Button.builder(Component.literal("重命名"), ignored -> renameAdminCategory())
                 .bounds(0, 0, 70, 18)
                 .build());
-        adminRemoveCategoryButton = addRenderableWidget(Button.builder(Component.literal("Reset Cat"), ignored -> resetAdminCategory())
+        adminRemoveCategoryButton = addRenderableWidget(Button.builder(Component.literal("重置"), ignored -> resetAdminCategory())
                 .bounds(0, 0, 86, 18)
+                .build());
+        adminPriceModeButton = addRenderableWidget(Button.builder(Component.literal("模式: AUTO"), ignored -> cycleAdminPriceMode())
+                .bounds(0, 0, 82, 18)
+                .build());
+        adminInfiniteStockButton = addRenderableWidget(Button.builder(Component.literal("库存: 普通"), ignored -> toggleAdminInfiniteStock())
+                .bounds(0, 0, 88, 18)
                 .build());
         for (int i = 0; i < 8; i++) {
             final int slot = i;
@@ -222,7 +249,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         }
         for (int i = 0; i < MAX_SYSTEM_BUTTONS; i++) {
             final int offerIndex = i;
-            Button button = Button.builder(Component.literal("Buy"), ignored -> openSystemOffer(offerIndex))
+            Button button = Button.builder(Component.literal("购买"), ignored -> openSystemOffer(offerIndex))
                     .bounds(leftPos + 22, topPos + 62, 42, 14)
                     .build();
             systemTradeButtons.add(addRenderableWidget(button));
@@ -245,7 +272,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
 
         MarketMenuSnapshot snapshot = menu.snapshot();
         guiGraphics.drawString(font, title, leftPos + 10, topPos + 9, 0xF4E7C5, false);
-        guiGraphics.drawString(font, "Balance: " + snapshot.balance() + " " + MarketEconomy.CURRENCY_NAME, leftPos + 324, topPos + 9, 0xD6E8D2, false);
+        guiGraphics.drawString(font, "余额: " + snapshot.balance() + " " + MarketEconomy.CURRENCY_NAME, leftPos + 324, topPos + 9, 0xD6E8D2, false);
         if (sellMode) {
             renderSellPanel(guiGraphics);
             return;
@@ -261,7 +288,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
 
         List<MarketMenuEntry> entries = snapshot.entries();
         if (entries.isEmpty()) {
-            guiGraphics.drawString(font, "No listings yet. Use /market sell <price> to list your held item.", leftPos + 18, topPos + 96, 0xB8C0CC, false);
+            guiGraphics.drawString(font, "交易行暂无玩家挂单。可在上架页上架手中物品。", leftPos + 18, topPos + 96, 0xB8C0CC, false);
             return;
         }
 
@@ -390,8 +417,8 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
 
         String itemName = trim(entry.item().getHoverName().getString(), 92);
         guiGraphics.drawString(font, itemName, x + 30, y + 5, 0xF3F0E8, false);
-        guiGraphics.drawString(font, "Seller: " + trim(entry.sellerName(), 72), x + 30, y + 17, 0xAEB7C4, false);
-        guiGraphics.drawString(font, entry.price() + " " + MarketEconomy.CURRENCY_NAME + " each", x + 115, y + 13, 0xD6E8D2, false);
+        guiGraphics.drawString(font, "卖家: " + trim(entry.sellerName(), 72), x + 30, y + 17, 0xAEB7C4, false);
+        guiGraphics.drawString(font, entry.price() + " " + MarketEconomy.CURRENCY_NAME + "/个", x + 115, y + 13, 0xD6E8D2, false);
         //guiGraphics.drawString(font, entry.shortId() + " | " + entry.count() + " left", x + 126, y + 17, 0xAEB7C4, false);
     }
 
@@ -440,23 +467,23 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             submitSellButton.setRectangle(submitButtonWidth, submitButtonHeight, submitButtonX, submitButtonY);
         }
 
-        guiGraphics.drawString(font, "Sell Held Item", leftPos + 18, topPos + 36, 0xF3F0E8, false);
-        guiGraphics.drawString(font, "Put the item you want to sell in your main hand.", leftPos + 18, topPos + 52, 0xAEB7C4, false);
+        guiGraphics.drawString(font, "上架手中物品", leftPos + 18, topPos + 36, 0xF3F0E8, false);
+        guiGraphics.drawString(font, "把要上架的物品拿在主手。", leftPos + 18, topPos + 52, 0xAEB7C4, false);
 
         ItemStack held = minecraft.player == null ? ItemStack.EMPTY : minecraft.player.getInventory().getSelected();
         guiGraphics.fill(panelX, panelY, panelX + panelWidth, panelY + panelHeight, 0x5522272E);
         if (held.isEmpty()) {
-            guiGraphics.drawString(font, "Main hand is empty.", leftPos + 36, topPos + 106, 0xD68A8A, false);
+            guiGraphics.drawString(font, "主手为空。", leftPos + 36, topPos + 106, 0xD68A8A, false);
         } else {
             renderScaledItem(guiGraphics, held, heldIconX, heldIconY, heldIconScale);
             drawCenteredStringAt(guiGraphics, trim(held.getHoverName().getString(), 128), heldInfoCenterX, heldNameY, 0xF3F0E8);
-            drawCenteredStringAt(guiGraphics, "Available: " + maxSellCount(), heldInfoCenterX, heldAvailableY, 0xAEB7C4);
+            drawCenteredStringAt(guiGraphics, "可用: " + maxSellCount(), heldInfoCenterX, heldAvailableY, 0xAEB7C4);
         }
 
-        guiGraphics.drawString(font, "Unit price", priceLabelX, priceLabelY, 0xD9DEE8, false);
-        guiGraphics.drawString(font, MarketEconomy.CURRENCY_NAME + " each", currencyTextX, currencyTextY, 0xAEB7C4, false);
-        guiGraphics.drawString(font, "Count", countLabelX, countLabelY, 0xD9DEE8, false);
-        guiGraphics.drawString(font, "Duration: 7 days. Listing fee disabled.", leftPos + 28, topPos + 235, 0xAEB7C4, false);
+        guiGraphics.drawString(font, "单价", priceLabelX, priceLabelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, MarketEconomy.CURRENCY_NAME + "/个", currencyTextX, currencyTextY, 0xAEB7C4, false);
+        guiGraphics.drawString(font, "数量", countLabelX, countLabelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "持续: 7天。当前无上架费。", leftPos + 28, topPos + 235, 0xAEB7C4, false);
     }
 
     private void renderSystemPanel(GuiGraphics guiGraphics) {
@@ -549,11 +576,11 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             systemTradeButtons.get(i).setRectangle(tradeButtonWidth, tradeButtonHeight,
                     x + (cardWidth - tradeButtonWidth) / 2, y + cardHeight - tradeButtonBottomPadding);
             systemTradeButtons.get(i).visible = true;
-            systemTradeButtons.get(i).active = true;
+            systemTradeButtons.get(i).active = systemOfferAvailable(offer) > 0;
             visibleIndex++;
         }
         if (visibleIndex == 0) {
-            guiGraphics.drawString(font, "No offers in " + selectedSystemBuyCategory + " yet.", cardStartX, panelY + 70, 0xAEB7C4, false);
+            guiGraphics.drawString(font, selectedSystemBuyCategory + " 暂无货架。", cardStartX, panelY + 70, 0xAEB7C4, false);
         }
         renderScrollbar(guiGraphics, panelRight - 8, cardStartY, panelBottom - 8, systemBuyScrollRow, totalRows, rows);
     }
@@ -602,7 +629,7 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             visibleIndex++;
         }
         if (visibleIndex == 0) {
-            guiGraphics.drawString(font, "No system buyback offers yet.", panelX + 18, panelY + 70, 0xAEB7C4, false);
+            guiGraphics.drawString(font, "暂无系统回收货架。", panelX + 18, panelY + 70, 0xAEB7C4, false);
         }
         renderScrollbar(guiGraphics, panelRight - 8, cardStartY, panelBottom - 8, systemSellScrollRow, totalRows, rows);
     }
@@ -632,15 +659,15 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         int cellSize = 24;
         int gridColumns = Math.max(1, (panelRight - gridX - 18) / cellSize);
         int gridRows = Math.max(1, (panelBottom - gridY - 8) / cellSize);
-        int itemEditorX = leftPos + 115;
-        int itemEditorY = topPos + 82;
-        int itemEditorPriceX = itemEditorX + 214;
-        int itemEditorPriceY = itemEditorY + 45;
-        int itemEditorButtonX = itemEditorX + 18;
-        int itemEditorButtonY = itemEditorY + 96;
-        int itemEditorButtonWidth = 62;
+        int itemEditorX = leftPos + 92;
+        int itemEditorY = topPos + 52;
+        int itemEditorControlY = itemEditorY + 72;
+        int itemEditorInputY = itemEditorY + 118;
+        int itemEditorButtonX = itemEditorX + 10;
+        int itemEditorButtonY = itemEditorY + 158;
+        int itemEditorButtonWidth = 70;
         int itemEditorButtonHeight = 18;
-        int itemEditorButtonGap = 8;
+        int itemEditorButtonGap = 5;
         boolean editingItem = selectedAdminItem != null;
 
         if (adminIdBox != null) {
@@ -650,7 +677,16 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             adminItemBox.setRectangle(searchBoxWidth, searchBoxHeight, searchBoxX, searchBoxY);
         }
         if (adminPriceBox != null) {
-            adminPriceBox.setRectangle(80, 18, selectedAdminItem == null ? leftPos - 1000 : itemEditorPriceX, itemEditorPriceY);
+            adminPriceBox.setRectangle(66, 18, selectedAdminItem == null ? leftPos - 1000 : itemEditorX + 18, itemEditorInputY);
+        }
+        if (adminMultiplierBox != null) {
+            adminMultiplierBox.setRectangle(56, 18, selectedAdminItem == null ? leftPos - 1000 : itemEditorX + 92, itemEditorInputY);
+        }
+        if (adminMinPriceBox != null) {
+            adminMinPriceBox.setRectangle(58, 18, selectedAdminItem == null ? leftPos - 1000 : itemEditorX + 156, itemEditorInputY);
+        }
+        if (adminMaxPriceBox != null) {
+            adminMaxPriceBox.setRectangle(58, 18, selectedAdminItem == null ? leftPos - 1000 : itemEditorX + 222, itemEditorInputY);
         }
         if (adminOfferCategoryBox != null) {
             adminOfferCategoryBox.setRectangle(1, 1, leftPos - 1000, topPos - 1000);
@@ -671,6 +707,12 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         if (adminRemoveSellButton != null) {
             adminRemoveSellButton.setRectangle(itemEditorButtonWidth, itemEditorButtonHeight, itemEditorButtonX + (itemEditorButtonWidth + itemEditorButtonGap) * 3, itemEditorButtonY);
         }
+        if (adminPriceModeButton != null) {
+            adminPriceModeButton.setRectangle(86, 18, itemEditorX + 18, itemEditorControlY);
+        }
+        if (adminInfiniteStockButton != null) {
+            adminInfiniteStockButton.setRectangle(100, 18, itemEditorX + 112, itemEditorControlY);
+        }
         if (adminReloadButton != null) {
             adminReloadButton.setRectangle(100, 18, panelRight - 112, panelY + 8);
         }
@@ -687,15 +729,15 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
 
         guiGraphics.fill(panelX, panelY, panelRight, panelBottom, 0x5522272E);
         if (!editingItem) {
-            guiGraphics.drawString(font, "System Market Admin", panelX + 12, panelY + 10, 0xF4E7C5, false);
+            guiGraphics.drawString(font, "系统商店管理", panelX + 12, panelY + 10, 0xF4E7C5, false);
             if (!adminStatus.isBlank()) {
                 guiGraphics.drawString(font, trim(adminStatus, panelRight - panelX - 24), panelX + 150, panelY + 10, 0xD6E8D2, false);
             }
-            guiGraphics.drawString(font, "Category Slot", categorySlotButtonX, categorySlotButtonY - 10, labelColor, false);
-            guiGraphics.drawString(font, "New Category Name", categoryNameBoxX, categoryNameBoxY - 10, labelColor, false);
-            guiGraphics.drawString(font, "Selected: " + selectedAdminCategorySlotName(), categoryNameBoxX + 306, categoryNameBoxY + 5, 0xAEB7C4, false);
-            guiGraphics.drawString(font, "Search", searchBoxX, searchBoxY - 10, labelColor, false);
-            guiGraphics.drawString(font, "Click an item below to configure it.", gridX, gridY - 12, 0xAEB7C4, false);
+            guiGraphics.drawString(font, "分类槽", categorySlotButtonX, categorySlotButtonY - 10, labelColor, false);
+            guiGraphics.drawString(font, "新分类名", categoryNameBoxX, categoryNameBoxY - 10, labelColor, false);
+            guiGraphics.drawString(font, "当前: " + selectedAdminCategorySlotName(), categoryNameBoxX + 306, categoryNameBoxY + 5, 0xAEB7C4, false);
+            guiGraphics.drawString(font, "搜索", searchBoxX, searchBoxY - 10, labelColor, false);
+            guiGraphics.drawString(font, "点击下方物品进行配置。", gridX, gridY - 12, 0xAEB7C4, false);
 
             List<Item> adminItems = adminItems();
             adminItemScrollRow = clampScrollRow(adminItemScrollRow, Math.max(1, (adminItems.size() + gridColumns - 1) / gridColumns), gridRows);
@@ -721,20 +763,19 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
     }
 
     private void renderAdminItemEditor(GuiGraphics guiGraphics) {
-        int x = leftPos + 118;
-        int y = topPos + 82;
-        int w = 300;
-        int h = 124;
+        int x = leftPos + 92;
+        int y = topPos + 52;
+        int w = 316;
+        int h = 188;
         int iconX = x + 20;
         int iconY = y + 26;
         int nameX = x + 56;
         int nameY = y + 20;
         int idY = y + 36;
         int slotY = y + 52;
-        int priceLabelX = x + 176;
-        int priceLabelY = y + 50;
+        int labelY = y + 108;
         int hintX = x + 18;
-        int hintY = y + 76;
+        int hintY = y + 94;
         int overlayX = leftPos + 8;
         int overlayY = topPos + 24;
         int overlayRight = leftPos + imageWidth - 8;
@@ -746,9 +787,13 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         guiGraphics.renderItem(stack, iconX, iconY);
         guiGraphics.drawString(font, trim(stack.getHoverName().getString(), 210), nameX, nameY, 0xF3F0E8, false);
         guiGraphics.drawString(font, trim(BuiltInRegistries.ITEM.getKey(selectedAdminItem).toString(), 210), nameX, idY, 0xAEB7C4, false);
-        guiGraphics.drawString(font, "Slot: " + selectedAdminCategorySlotName(), nameX, slotY, 0xD6E8D2, false);
-        guiGraphics.drawString(font, "Fallback Price", priceLabelX, priceLabelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "分类: " + selectedAdminCategorySlotName(), nameX, slotY, 0xD6E8D2, false);
         guiGraphics.drawString(font, dynamicAdminPriceText(selectedAdminItem), hintX, hintY, 0xAEB7C4, false);
+        guiGraphics.drawString(font, "基准", x + 18, labelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "倍率", x + 92, labelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "最低", x + 156, labelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "最高", x + 222, labelY, 0xD9DEE8, false);
+        guiGraphics.drawString(font, adminPriceModeHelpText(), hintX, y + 140, 0xAEB7C4, false);
     }
 
     private void renderBuyConfirmation(GuiGraphics guiGraphics) {
@@ -788,10 +833,10 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         renderScaledItem(guiGraphics, item, x + 60, y + 25, 2.0F);
         guiGraphics.drawString(font, trim(item.getHoverName().getString(), 190), x + 120, y + 31, 0xF3F0E8, false);
         guiGraphics.drawString(font, confirmationAvailableLabel(available), x + 120, y + 45, 0xAEB7C4, false);
-        guiGraphics.drawString(font, "Unit price", x + 50, y + 70, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "单价", x + 50, y + 70, 0xD9DEE8, false);
         guiGraphics.drawString(font, unitPrice + " " + MarketEconomy.CURRENCY_NAME, x + 160, y + 70, 0xD6E8D2, false);
-        guiGraphics.drawString(font, "Count", x + 50, y + 88, 0xD9DEE8, false);
-        guiGraphics.drawString(font, "Total", x + 50, y + 106, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "数量", x + 50, y + 88, 0xD9DEE8, false);
+        guiGraphics.drawString(font, "合计", x + 50, y + 106, 0xD9DEE8, false);
         guiGraphics.drawString(font, buyTotalPrice() + " " + MarketEconomy.CURRENCY_NAME, x + 160, y + 106, 0xD6E8D2, false);
     }
 
@@ -934,6 +979,18 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             adminPriceBox.visible = active && selectedAdminItem != null;
             adminPriceBox.active = active && selectedAdminItem != null;
         }
+        if (adminMultiplierBox != null) {
+            adminMultiplierBox.visible = active && selectedAdminItem != null;
+            adminMultiplierBox.active = active && selectedAdminItem != null;
+        }
+        if (adminMinPriceBox != null) {
+            adminMinPriceBox.visible = active && selectedAdminItem != null;
+            adminMinPriceBox.active = active && selectedAdminItem != null;
+        }
+        if (adminMaxPriceBox != null) {
+            adminMaxPriceBox.visible = active && selectedAdminItem != null;
+            adminMaxPriceBox.active = active && selectedAdminItem != null;
+        }
         if (adminOfferCategoryBox != null) {
             adminOfferCategoryBox.visible = active;
             adminOfferCategoryBox.active = false;
@@ -947,11 +1004,11 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         }
         if (adminAddBuyButton != null) {
             adminAddBuyButton.visible = active && selectedAdminItem != null;
-            adminAddBuyButton.active = active && selectedAdminItem != null && parseAdminPrice() > 0L;
+            adminAddBuyButton.active = active && selectedAdminItem != null && adminPricingInputValid();
         }
         if (adminAddSellButton != null) {
             adminAddSellButton.visible = active && selectedAdminItem != null;
-            adminAddSellButton.active = active && selectedAdminItem != null && parseAdminPrice() > 0L;
+            adminAddSellButton.active = active && selectedAdminItem != null && adminPricingInputValid();
         }
         if (adminRemoveButton != null) {
             adminRemoveButton.visible = active && selectedAdminItem != null;
@@ -972,6 +1029,17 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         if (adminRemoveCategoryButton != null) {
             adminRemoveCategoryButton.visible = active && selectedAdminItem == null;
             adminRemoveCategoryButton.active = active && selectedAdminItem == null;
+        }
+        if (adminPriceModeButton != null) {
+            adminPriceModeButton.visible = active && selectedAdminItem != null;
+            adminPriceModeButton.active = active && selectedAdminItem != null;
+            adminPriceModeButton.setMessage(Component.literal("模式: " + adminPriceMode.name()));
+        }
+        if (adminInfiniteStockButton != null) {
+            boolean systemSells = active && selectedAdminItem != null;
+            adminInfiniteStockButton.visible = systemSells;
+            adminInfiniteStockButton.active = systemSells;
+            adminInfiniteStockButton.setMessage(Component.literal(adminInfiniteStock ? "库存: 无限" : "库存: 普通"));
         }
         for (int i = 0; i < adminCategorySlotButtons.size(); i++) {
             Button button = adminCategorySlotButtons.get(i);
@@ -1065,6 +1133,28 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         if (adminCategoryNameBox != null) {
             adminCategoryNameBox.setFocused(true);
         }
+        if (selectedAdminItem != null) {
+            loadAdminPricingFromOffer(selectedAdminItem);
+        }
+        updateButtonStates();
+    }
+
+    private void cycleAdminPriceMode() {
+        adminPriceMode = switch (adminPriceMode) {
+            case AUTO -> PriceMode.FIXED;
+            case FIXED -> PriceMode.MULTIPLIER;
+            case MULTIPLIER -> PriceMode.BAND;
+            case BAND -> PriceMode.ANCHOR;
+            case ANCHOR -> PriceMode.AUTO;
+        };
+        if (adminMultiplierBox != null && adminMultiplierBox.getValue().isBlank()) {
+            adminMultiplierBox.setValue("1.0");
+        }
+        updateButtonStates();
+    }
+
+    private void toggleAdminInfiniteStock() {
+        adminInfiniteStock = !adminInfiniteStock;
         updateButtonStates();
     }
 
@@ -1168,12 +1258,11 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
     }
 
     private String systemButtonText(SystemMarketOffer offer) {
-        return offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS ? "Buy" : "Sell";
+        return offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS ? "购买" : "出售";
     }
 
     private void submitAdminOffer(String offerType) {
-        long price = parseAdminPrice();
-        if (selectedAdminItem == null || price <= 0L) {
+        if (selectedAdminItem == null || !adminPricingInputValid()) {
             return;
         }
         String itemId = BuiltInRegistries.ITEM.getKey(selectedAdminItem).toString();
@@ -1181,46 +1270,55 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         if ("sell_to_player".equals(offerType)) {
             category = selectedAdminCategorySlotName();
         }
-        PacketDistributor.sendToServer(MarketAdminActionPayload.add(
+        PacketDistributor.sendToServer(MarketAdminActionPayload.addPriced(
                 generatedAdminOfferId(offerType, itemId, category),
                 offerType,
                 itemId,
-                price,
-                category));
-        adminStatus = "sell_to_player".equals(offerType) ? "Sent add buy offer request." : "Sent add sell offer request.";
+                category,
+                adminPriceMode.name(),
+                parseAdminPrice(),
+                parseAdminMultiplier(),
+                parseAdminMinPrice(),
+                parseAdminMaxPrice(),
+                adminFlagsForOfferType(offerType)));
+        adminStatus = "sell_to_player".equals(offerType) ? "已发送: 添加购买货架" : "已发送: 添加回收货架";
     }
 
     private void removeAdminOffer() {
         if (selectedAdminItem != null) {
             String itemId = BuiltInRegistries.ITEM.getKey(selectedAdminItem).toString();
-            PacketDistributor.sendToServer(MarketAdminActionPayload.remove(generatedAdminOfferId("sell_to_player", itemId, selectedAdminCategorySlotName())));
-            adminStatus = "Sent remove buy offer request.";
+            SystemMarketOffer offer = findAdminOffer(selectedAdminItem, "sell_to_player");
+            String id = offer == null ? generatedAdminOfferId("sell_to_player", itemId, selectedAdminCategorySlotName()) : offer.id();
+            PacketDistributor.sendToServer(MarketAdminActionPayload.remove(id));
+            adminStatus = "已发送: 删除购买货架";
         }
     }
 
     private void removeAdminSellOffer() {
         if (selectedAdminItem != null) {
             String itemId = BuiltInRegistries.ITEM.getKey(selectedAdminItem).toString();
-            PacketDistributor.sendToServer(MarketAdminActionPayload.remove(generatedAdminOfferId("buy_from_player", itemId, "")));
-            adminStatus = "Sent remove sell offer request.";
+            SystemMarketOffer offer = findAdminOffer(selectedAdminItem, "buy_from_player");
+            String id = offer == null ? generatedAdminOfferId("buy_from_player", itemId, "") : offer.id();
+            PacketDistributor.sendToServer(MarketAdminActionPayload.remove(id));
+            adminStatus = "已发送: 删除回收货架";
         }
     }
 
     private void reloadAdminConfig() {
         PacketDistributor.sendToServer(MarketAdminActionPayload.reload());
-        adminStatus = "Sent reload request.";
+        adminStatus = "已发送: 重载配置";
     }
 
     private void renameAdminCategory() {
         if (adminCategoryNameBox != null && !adminCategoryNameBox.getValue().isBlank()) {
             PacketDistributor.sendToServer(MarketAdminActionPayload.renameCategory(selectedAdminCategorySlotName(), adminCategoryNameBox.getValue()));
-            adminStatus = "Sent rename category request.";
+            adminStatus = "已发送: 重命名分类";
         }
     }
 
     private void resetAdminCategory() {
         PacketDistributor.sendToServer(MarketAdminActionPayload.resetCategory(selectedAdminCategorySlotName()));
-        adminStatus = "Sent reset category request.";
+        adminStatus = "已发送: 重置分类";
     }
 
     private String selectedAdminCategorySlotName() {
@@ -1240,6 +1338,52 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         } catch (NumberFormatException ignored) {
             return 0L;
         }
+    }
+
+    private long parseAdminMinPrice() {
+        return parseLongBox(adminMinPriceBox);
+    }
+
+    private long parseAdminMaxPrice() {
+        return parseLongBox(adminMaxPriceBox);
+    }
+
+    private long parseLongBox(EditBox box) {
+        if (box == null || box.getValue().isBlank()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(box.getValue());
+        } catch (NumberFormatException ignored) {
+            return 0L;
+        }
+    }
+
+    private double parseAdminMultiplier() {
+        if (adminMultiplierBox == null || adminMultiplierBox.getValue().isBlank()) {
+            return 1.0D;
+        }
+        try {
+            return Double.parseDouble(adminMultiplierBox.getValue());
+        } catch (NumberFormatException ignored) {
+            return 0.0D;
+        }
+    }
+
+    private boolean adminPricingInputValid() {
+        return switch (adminPriceMode) {
+            case FIXED, ANCHOR -> parseAdminPrice() > 0L;
+            case AUTO -> true;
+            case MULTIPLIER -> parseAdminMultiplier() > 0.0D;
+            case BAND -> parseAdminMinPrice() <= 0L || parseAdminMaxPrice() <= 0L || parseAdminMinPrice() <= parseAdminMaxPrice();
+        };
+    }
+
+    private String adminFlagsForOfferType(String offerType) {
+        if ("sell_to_player".equals(offerType) && adminInfiniteStock) {
+            return "infinite_stock";
+        }
+        return "";
     }
 
     private String generatedAdminOfferId(String offerType, String itemId, String category) {
@@ -1280,19 +1424,16 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
         if (adminCategoryNameBox != null) {
             adminCategoryNameBox.setFocused(false);
         }
-        if (adminPriceBox != null) {
-            adminPriceBox.setValue(existingAdminPriceText(selectedAdminItem, false));
-            adminPriceBox.setFocused(true);
-        }
+        loadAdminPricingFromOffer(selectedAdminItem);
         updateButtonStates();
         return true;
     }
 
     private boolean isInsideAdminItemEditor(double mouseX, double mouseY) {
-        int x = leftPos + 118;
-        int y = topPos + 92;
-        int w = 260;
-        int h = 94;
+        int x = leftPos + 92;
+        int y = topPos + 52;
+        int w = 316;
+        int h = 188;
         return mouseX >= x && mouseX <= x + w && mouseY >= y && mouseY <= y + h;
     }
 
@@ -1302,36 +1443,96 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             adminPriceBox.setFocused(false);
             adminPriceBox.setValue("");
         }
+        if (adminMultiplierBox != null) {
+            adminMultiplierBox.setFocused(false);
+            adminMultiplierBox.setValue("1.0");
+        }
+        if (adminMinPriceBox != null) {
+            adminMinPriceBox.setFocused(false);
+            adminMinPriceBox.setValue("");
+        }
+        if (adminMaxPriceBox != null) {
+            adminMaxPriceBox.setFocused(false);
+            adminMaxPriceBox.setValue("");
+        }
+        adminPriceMode = PriceMode.AUTO;
+        adminInfiniteStock = false;
         updateButtonStates();
     }
 
-    private String existingAdminPriceText(Item item, boolean sellOffer) {
-        String id = generatedAdminOfferId(sellOffer ? "buy_from_player" : "sell_to_player",
-                BuiltInRegistries.ITEM.getKey(item).toString(),
-                sellOffer ? "" : selectedAdminCategorySlotName());
-        for (String line : SystemMarketOffer.fallbackOfferLines()) {
-            SystemMarketOffer offer = SystemMarketOffer.parse(line);
-            if (offer != null && offer.id().equals(id)) {
-                return Long.toString(offer.unitPrice());
-            }
-        }
-        return "";
+    private String dynamicAdminPriceText(Item item) {
+        SystemMarketOffer buyOffer = findAdminOffer(item, "sell_to_player");
+        SystemMarketOffer sellOffer = findAdminOffer(item, "buy_from_player");
+        String buyPrice = buyOffer == null ? "" : adminOfferSummary(buyOffer);
+        String sellPrice = sellOffer == null ? "" : adminOfferSummary(sellOffer);
+        return "系统卖价: " + (buyPrice.isBlank() ? "-" : buyPrice) + " / 回收价: " + (sellPrice.isBlank() ? "-" : sellPrice);
     }
 
-    private String dynamicAdminPriceText(Item item) {
+    private void loadAdminPricingFromOffer(Item item) {
+        SystemMarketOffer offer = findAdminOffer(item, "sell_to_player");
+        if (offer == null) {
+            offer = findAdminOffer(item, "buy_from_player");
+        }
+        SystemOfferPricing pricing = offer == null ? null : offer.pricing();
+        adminPriceMode = pricing == null ? PriceMode.AUTO : pricing.mode();
+        adminInfiniteStock = offer != null && offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS && pricing.infiniteStock();
+        setLongBox(adminPriceBox, pricing == null || pricing.basePrice() <= 0L ? "" : Long.toString(pricing.basePrice()));
+        setDecimalBox(adminMultiplierBox, pricing == null || pricing.multiplier() <= 0.0D ? "1.0" : Double.toString(pricing.multiplier()));
+        setLongBox(adminMinPriceBox, pricing == null || pricing.minPrice() <= 0L ? "" : Long.toString(pricing.minPrice()));
+        setLongBox(adminMaxPriceBox, pricing == null || pricing.maxPrice() <= 0L ? "" : Long.toString(pricing.maxPrice()));
+        if (adminPriceBox != null) {
+            adminPriceBox.setFocused(true);
+        }
+    }
+
+    private SystemMarketOffer findAdminOffer(Item item, String offerType) {
         String itemId = BuiltInRegistries.ITEM.getKey(item).toString();
-        String buyId = generatedAdminOfferId("sell_to_player", itemId, selectedAdminCategorySlotName());
-        String sellId = generatedAdminOfferId("buy_from_player", itemId, "");
-        String buyPrice = "";
-        String sellPrice = "";
-        for (SystemMarketOffer offer : systemOffersForDisplay()) {
-            if (offer.id().equals(buyId)) {
-                buyPrice = Long.toString(offer.unitPrice());
-            } else if (offer.id().equals(sellId)) {
-                sellPrice = Long.toString(offer.unitPrice());
+        String id = generatedAdminOfferId(offerType, itemId, "sell_to_player".equals(offerType) ? selectedAdminCategorySlotName() : "");
+        for (String line : SystemMarketOffer.fallbackOfferLines()) {
+            SystemMarketOffer offer = SystemMarketOffer.parse(line);
+            if (offer == null || !offer.item().is(item)) {
+                continue;
+            }
+            if ("sell_to_player".equals(offerType) && offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS
+                    && (offer.id().equals(id) || offer.buyCategory().equals(selectedAdminCategorySlotName()))) {
+                return offer;
+            }
+            if ("buy_from_player".equals(offerType) && offer.type() == SystemMarketOffer.Type.SYSTEM_BUYS) {
+                return offer;
             }
         }
-        return "Dynamic buy: " + (buyPrice.isBlank() ? "-" : buyPrice) + " / sell: " + (sellPrice.isBlank() ? "-" : sellPrice);
+        return null;
+    }
+
+    private String adminOfferSummary(SystemMarketOffer offer) {
+        String mode = offer.pricing().mode().name();
+        String price = offer.unitPrice() > 0L ? Long.toString(offer.unitPrice()) : mode;
+        if (offer.pricing().infiniteStock()) {
+            return price + " " + mode + " 无限";
+        }
+        return price + " " + mode;
+    }
+
+    private String adminPriceModeHelpText() {
+        return switch (adminPriceMode) {
+            case AUTO -> "AUTO 使用动态经济，不必填写基准价。";
+            case FIXED -> "FIXED 直接使用基准价。";
+            case MULTIPLIER -> "MULTIPLIER 用倍率调整动态价。";
+            case BAND -> "BAND 把动态价限制在最低/最高之间。";
+            case ANCHOR -> "ANCHOR 用基准价混合市场历史。";
+        };
+    }
+
+    private static void setLongBox(EditBox box, String value) {
+        if (box != null) {
+            box.setValue(value);
+        }
+    }
+
+    private static void setDecimalBox(EditBox box, String value) {
+        if (box != null) {
+            box.setValue(value);
+        }
     }
 
     private List<Item> adminItems() {
@@ -1454,23 +1655,42 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             return selectedBuyEntry.count();
         }
         if (selectedSystemOffer.type() == SystemMarketOffer.Type.SYSTEM_SELLS) {
-            return 999;
+            return systemOfferAvailable(selectedSystemOffer);
         }
         return minecraft == null || minecraft.player == null ? 0 : InventoryUtil.countMatching(minecraft.player.getInventory(), selectedSystemOffer.item());
     }
 
     private String confirmationTitle() {
         if (selectedBuyEntry != null || selectedSystemOffer.type() == SystemMarketOffer.Type.SYSTEM_SELLS) {
-            return "Confirm Purchase";
+            return "确认购买";
         }
-        return "Confirm Sale";
+        return "确认出售";
     }
 
     private String confirmationAvailableLabel(int available) {
         if (selectedSystemOffer != null && selectedSystemOffer.type() == SystemMarketOffer.Type.SYSTEM_SELLS) {
-            return "Available: unlimited";
+            return "可用: " + systemStockLabel(selectedSystemOffer);
         }
-        return "Available: " + available;
+        return "可用: " + available;
+    }
+
+    private int systemOfferAvailable(SystemMarketOffer offer) {
+        if (offer.type() != SystemMarketOffer.Type.SYSTEM_SELLS) {
+            return minecraft == null || minecraft.player == null ? 0 : InventoryUtil.countMatching(minecraft.player.getInventory(), offer.item());
+        }
+        long stock = SystemMarketOffer.syncedStock(offer.id());
+        if (stock == Long.MAX_VALUE) {
+            return 999;
+        }
+        return stock <= 0L ? 0 : (int) Math.min(999L, stock);
+    }
+
+    private String systemStockLabel(SystemMarketOffer offer) {
+        long stock = SystemMarketOffer.syncedStock(offer.id());
+        if (stock == Long.MAX_VALUE) {
+            return "无限";
+        }
+        return "库存: " + stock;
     }
 
     private boolean isSystemOfferVisible(SystemMarketOffer offer) {
@@ -1673,18 +1893,18 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
     private String timeLeft(long expiresAt) {
         long millis = expiresAt - System.currentTimeMillis();
         if (millis <= 0L) {
-            return "expired";
+            return "已过期";
         }
         Duration duration = Duration.ofMillis(millis);
         long days = duration.toDays();
         if (days > 0L) {
-            return days + "d left";
+            return "剩余" + days + "天";
         }
         long hours = duration.toHours();
         if (hours > 0L) {
-            return hours + "h left";
+            return "剩余" + hours + "小时";
         }
-        return Math.max(1L, duration.toMinutes()) + "m left";
+        return "剩余" + Math.max(1L, duration.toMinutes()) + "分钟";
     }
 
     private String trim(String value, int maxWidth) {
@@ -1698,6 +1918,25 @@ public class MarketScreen extends AbstractContainerScreen<MarketMenu> {
             result = result.substring(0, result.length() - 1);
         }
         return result + ellipsis;
+    }
+
+    private static boolean isDecimalInput(String value) {
+        if (value.isEmpty()) {
+            return true;
+        }
+        int dots = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '.') {
+                dots++;
+                if (dots > 1) {
+                    return false;
+                }
+            } else if (!Character.isDigit(c)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void drawCenteredString(GuiGraphics guiGraphics, String text, int x, int y, int width, int color) {

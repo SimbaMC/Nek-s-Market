@@ -26,6 +26,6 @@ public record PriceProfile(
                 0L,
                 0L,
                 0L,
-                "No reliable price source.");
+                "没有可靠价格来源。");
     }
 }

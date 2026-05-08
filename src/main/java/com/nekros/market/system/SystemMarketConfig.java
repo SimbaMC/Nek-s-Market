@@ -17,8 +17,75 @@ public final class SystemMarketConfig {
     public static Result addOffer(String id, String type, String itemId, long unitPrice, String category) {
         String normalizedCategory = normalizeCategory(type, category);
         String line = id.trim() + "|" + type.trim() + "|" + itemId.trim() + "|" + unitPrice + "|" + normalizedCategory;
+        return addOfferLine(id, line, normalizedCategory);
+    }
+
+    public static Result addPricedOffer(String id, String type, String itemId, String category, PriceMode mode,
+            long basePrice, double multiplier, long minPrice, long maxPrice, String flags) {
+        String normalizedCategory = normalizeCategory(type, category);
+        String line = id.trim()
+                + "|" + type.trim()
+                + "|" + itemId.trim()
+                + "|" + normalizedCategory
+                + "|" + mode.name()
+                + "|" + basePrice
+                + "|" + multiplier
+                + "|" + minPrice
+                + "|" + maxPrice
+                + "|" + flags.trim();
+        return addOfferLine(id, line, normalizedCategory);
+    }
+
+    public static Result addPricedOffers(List<OfferDraft> drafts) {
+        if (drafts.isEmpty()) {
+            return Result.fail("没有可添加的系统货架。");
+        }
+
+        List<String> offers = mutableOffers();
+        int added = 0;
+        int skipped = 0;
+        for (OfferDraft draft : drafts) {
+            String normalizedCategory = normalizeCategory(draft.type(), draft.category());
+            String line = draft.id().trim()
+                    + "|" + draft.type().trim()
+                    + "|" + draft.itemId().trim()
+                    + "|" + normalizedCategory
+                    + "|" + draft.mode().name()
+                    + "|" + draft.basePrice()
+                    + "|" + draft.multiplier()
+                    + "|" + draft.minPrice()
+                    + "|" + draft.maxPrice()
+                    + "|" + draft.flags().trim();
+            SystemMarketOffer offer = SystemMarketOffer.parse(line);
+            if (offer == null) {
+                skipped++;
+                continue;
+            }
+            if (offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS && !knownCategory(normalizedCategory)) {
+                skipped++;
+                continue;
+            }
+            offers.removeIf(value -> value.split("\\|", -1)[0].trim().equals(draft.id().trim()));
+            offers.removeIf(value -> sameShelfItem(value, line));
+            offers.add(line);
+            added++;
+        }
+
+        if (added <= 0) {
+            return Result.fail("没有成功添加任何系统货架。");
+        }
+        saveOffers(offers);
+        String skippedText = skipped > 0 ? "，跳过 " + skipped + " 个" : "";
+        return Result.success("已批量添加 " + added + " 个系统货架" + skippedText + "。");
+    }
+
+    private static Result addOfferLine(String id, String line, String normalizedCategory) {
         if (SystemMarketOffer.parse(line) == null) {
-            return Result.fail("Invalid system offer.");
+            return Result.fail("无效系统货架。");
+        }
+        SystemMarketOffer offer = SystemMarketOffer.parse(line);
+        if (offer != null && offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS && !knownCategory(normalizedCategory)) {
+            return Result.fail("未知系统分类: " + normalizedCategory + "。可用分类: " + String.join(", ", knownCategories()));
         }
 
         List<String> offers = mutableOffers();
@@ -26,8 +93,8 @@ public final class SystemMarketConfig {
         offers.removeIf(value -> sameShelfItem(value, line));
         offers.add(line);
         saveOffers(offers);
-        String categoryNote = normalizedCategory.isEmpty() ? "" : " in category " + normalizedCategory;
-        return Result.success("Saved system offer: " + id.trim() + categoryNote);
+        String categoryNote = normalizedCategory.isEmpty() ? "" : "，分类 " + normalizedCategory;
+        return Result.success("已保存系统货架: " + id.trim() + categoryNote);
     }
 
     public static Result removeOffer(String id) {
@@ -35,27 +102,27 @@ public final class SystemMarketConfig {
         List<String> offers = mutableOffers();
         boolean removed = offers.removeIf(value -> value.split("\\|", -1)[0].trim().equals(trimmedId));
         if (!removed) {
-            return Result.fail("No system offer found with id: " + trimmedId);
+            return Result.fail("找不到系统货架 ID: " + trimmedId);
         }
         saveOffers(offers);
-        return Result.success("Removed system offer: " + trimmedId);
+        return Result.success("已移除系统货架: " + trimmedId);
     }
 
     public static Result renameCategory(String oldCategory, String newCategory) {
         String oldName = oldCategory.trim();
         String newName = newCategory.trim();
         if (oldName.isEmpty() || newName.isEmpty()) {
-            return Result.fail("Category names cannot be empty.");
+            return Result.fail("分类名不能为空。");
         }
         List<String> categories = mutableCategories();
         int index = categories.indexOf(oldName);
         if (index < 0) {
-            return Result.fail("No system category found: " + oldName);
+            return Result.fail("找不到系统分类: " + oldName);
         }
         categories.set(index, newName);
         saveCategories(categories);
         renameOfferCategories(oldName, newName);
-        return Result.success("Renamed system category " + oldName + " to " + newName + ".");
+        return Result.success("已将系统分类 " + oldName + " 重命名为 " + newName + "。");
     }
 
     public static Result resetCategory(String category) {
@@ -63,28 +130,27 @@ public final class SystemMarketConfig {
         List<String> categories = mutableCategories();
         int index = categories.indexOf(oldName);
         if (index < 0) {
-            return Result.fail("No system category found: " + oldName);
+            return Result.fail("找不到系统分类: " + oldName);
         }
         String defaultName = "#" + (index + 1);
         categories.set(index, defaultName);
         saveCategories(categories);
         renameOfferCategories(oldName, defaultName);
-        return Result.success("Reset system category " + oldName + " to " + defaultName + ".");
+        return Result.success("已将系统分类 " + oldName + " 重置为 " + defaultName + "。");
     }
 
     public static Result reload() {
         Path configPath = FMLPaths.CONFIGDIR.get().resolve(NeksMarket.MODID + "-common.toml");
         try (CommentedFileConfig config = CommentedFileConfig.builder(configPath).sync().autosave().build()) {
             config.load();
-            List<String> categories = stringList(config.get("systemMarket.buyCategories"));
+            List<String> categories = nonEmptyCategories(stringList(config.get("systemMarket.buyCategories")));
             List<String> offers = deduplicateShelfItems(stringList(config.get("systemMarket.offers")));
             Config.SYSTEM_BUY_CATEGORIES.set(categories);
             Config.SYSTEM_OFFERS.set(offers);
-            Config.SPEC.save();
-            return Result.success("Reloaded system market config.");
+            return Result.success("已重载系统商店配置。");
         } catch (RuntimeException exception) {
             NeksMarket.LOGGER.warn("Failed to reload system market config.", exception);
-            return Result.fail("Could not reload system market config: " + exception.getMessage());
+            return Result.fail("无法重载系统商店配置: " + exception.getMessage());
         }
     }
 
@@ -93,11 +159,19 @@ public final class SystemMarketConfig {
     }
 
     private static List<String> mutableCategories() {
-        return new ArrayList<>(Config.SYSTEM_BUY_CATEGORIES.get().stream().map(String::valueOf).toList());
+        return new ArrayList<>(nonEmptyCategories(Config.SYSTEM_BUY_CATEGORIES.get().stream().map(String::valueOf).toList()));
     }
 
     private static String normalizeCategory(String type, String category) {
         String trimmedCategory = category.trim();
+        if (isSystemSelling(type) && !trimmedCategory.isEmpty() && trimmedCategory.chars().allMatch(Character::isDigit)) {
+            int slot = Integer.parseInt(trimmedCategory);
+            List<String> categories = mutableCategories();
+            if (slot >= 1 && slot <= categories.size()) {
+                return categories.get(slot - 1).trim();
+            }
+            return "#" + trimmedCategory;
+        }
         if (!isSystemSelling(type) || !trimmedCategory.isEmpty()) {
             return trimmedCategory;
         }
@@ -108,6 +182,14 @@ public final class SystemMarketConfig {
         return categories.isEmpty() ? "#1" : categories.getFirst();
     }
 
+    private static boolean knownCategory(String category) {
+        return knownCategories().contains(category);
+    }
+
+    private static List<String> knownCategories() {
+        return nonEmptyCategories(mutableCategories());
+    }
+
     private static boolean isSystemSelling(String type) {
         String trimmedType = type.trim();
         return "sell_to_player".equalsIgnoreCase(trimmedType)
@@ -115,13 +197,21 @@ public final class SystemMarketConfig {
     }
 
     private static void saveOffers(List<String> offers) {
+        ensureCategoriesConfigured();
         Config.SYSTEM_OFFERS.set(deduplicateShelfItems(offers));
         Config.SPEC.save();
     }
 
     private static void saveCategories(List<String> categories) {
-        Config.SYSTEM_BUY_CATEGORIES.set(List.copyOf(categories));
+        Config.SYSTEM_BUY_CATEGORIES.set(nonEmptyCategories(categories));
         Config.SPEC.save();
+    }
+
+    private static void ensureCategoriesConfigured() {
+        List<String> categories = Config.SYSTEM_BUY_CATEGORIES.get().stream().map(String::valueOf).toList();
+        if (categories.stream().map(String::trim).noneMatch(value -> !value.isEmpty())) {
+            Config.SYSTEM_BUY_CATEGORIES.set(Config.defaultSystemBuyCategories());
+        }
     }
 
     private static void renameOfferCategories(String oldName, String newName) {
@@ -172,6 +262,14 @@ public final class SystemMarketConfig {
                 .toList();
     }
 
+    private static List<String> nonEmptyCategories(List<String> categories) {
+        List<String> normalized = categories.stream()
+                .map(String::trim)
+                .filter(value -> !value.isEmpty())
+                .toList();
+        return normalized.isEmpty() ? Config.defaultSystemBuyCategories() : normalized;
+    }
+
     public record Result(boolean success, String message) {
         static Result success(String message) {
             return new Result(true, message);
@@ -180,5 +278,18 @@ public final class SystemMarketConfig {
         static Result fail(String message) {
             return new Result(false, message);
         }
+    }
+
+    public record OfferDraft(
+            String id,
+            String type,
+            String itemId,
+            String category,
+            PriceMode mode,
+            long basePrice,
+            double multiplier,
+            long minPrice,
+            long maxPrice,
+            String flags) {
     }
 }

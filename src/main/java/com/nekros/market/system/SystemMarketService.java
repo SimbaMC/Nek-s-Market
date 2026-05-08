@@ -17,12 +17,12 @@ public final class SystemMarketService {
 
     public static Result trade(MarketSavedData data, ServerPlayer player, String offerId, int count) {
         if (count <= 0) {
-            return Result.fail("Count must be positive.");
+            return Result.fail("数量必须大于 0。");
         }
 
         SystemMarketOffer offer = SystemMarketOffer.byId(offerId);
         if (offer == null) {
-            return Result.fail("That system offer no longer exists.");
+            return Result.fail("该系统货架已不存在。");
         }
 
         SystemTradeQuote quote;
@@ -39,28 +39,28 @@ public final class SystemMarketService {
 
         if (offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS) {
             if (!InventoryUtil.canFit(player.getInventory(), offer.item(), count)) {
-                return Result.fail("You do not have enough inventory space.");
+                return Result.fail("背包空间不足。");
             }
             if (!MarketEconomy.withdraw(data, player.getUUID(), totalPrice)) {
-                return Result.fail("You do not have enough " + MarketEconomy.CURRENCY_NAME + ".");
+                return Result.fail("你的 " + MarketEconomy.CURRENCY_NAME + " 不足。");
             }
             InventoryUtil.addSplit(player.getInventory(), offer.item(), count);
-            SystemStockSavedData.get(player.server).recordSystemSell(itemId(offer), count);
+            SystemStockSavedData.get(player.server).recordSystemSell(itemId(offer), count, player.server.overworld().getGameTime());
             data.setDirty();
-            return Result.success("Bought " + offer.item().getHoverName().getString() + " x" + count + " for " + totalPrice + " " + MarketEconomy.CURRENCY_NAME + ".");
+            return Result.success("已购买 " + offer.item().getHoverName().getString() + " x" + count + "，花费 " + totalPrice + " " + MarketEconomy.CURRENCY_NAME + "。");
         }
 
         int available = InventoryUtil.countMatching(player.getInventory(), offer.item());
         if (available < count) {
-            return Result.fail("You only have " + available + " matching item(s).");
+            return Result.fail("你只有 " + available + " 个匹配物品。");
         }
         if (!InventoryUtil.removeMatching(player.getInventory(), offer.item(), count)) {
-            return Result.fail("Could not remove the selected item from your inventory.");
+            return Result.fail("无法从背包移除选中的物品。");
         }
         MarketEconomy.add(data, player.getUUID(), totalPrice);
-        SystemStockSavedData.get(player.server).recordSystemBuy(itemId(offer), count);
+        SystemStockSavedData.get(player.server).recordSystemBuy(itemId(offer), count, player.server.overworld().getGameTime());
         data.setDirty();
-        return Result.success("Sold " + offer.item().getHoverName().getString() + " x" + count + " for " + totalPrice + " " + MarketEconomy.CURRENCY_NAME + ".");
+        return Result.success("已出售 " + offer.item().getHoverName().getString() + " x" + count + "，获得 " + totalPrice + " " + MarketEconomy.CURRENCY_NAME + "。");
     }
 
     private static ResourceLocation itemId(SystemMarketOffer offer) {

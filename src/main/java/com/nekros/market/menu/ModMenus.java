@@ -16,6 +16,10 @@ public final class ModMenus {
             "market",
             () -> new MenuType<>((IContainerFactory<MarketMenu>) MarketMenu::new, FeatureFlags.VANILLA_SET));
 
+    public static final DeferredHolder<MenuType<?>, MenuType<SellerBoxMenu>> SELLER_BOX = MENUS.register(
+            "seller_box",
+            () -> new MenuType<>((IContainerFactory<SellerBoxMenu>) SellerBoxMenu::new, FeatureFlags.VANILLA_SET));
+
     private ModMenus() {
     }
 }

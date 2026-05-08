@@ -15,6 +15,7 @@ public record SystemMarketOffer(String id, ItemStack item, long unitPrice, Type 
     private static List<String> syncedBuyCategories;
     private static List<String> syncedOfferLines;
     private static List<String> syncedFallbackOfferLines;
+    private static List<String> syncedStockLines = List.of();
 
     public enum Type {
         SYSTEM_SELLS,
@@ -22,10 +23,11 @@ public record SystemMarketOffer(String id, ItemStack item, long unitPrice, Type 
     }
 
     public static List<String> buyCategories() {
-        return categoryLines().stream()
+        List<String> categories = categoryLines().stream()
                 .map(String::trim)
                 .filter(value -> !value.isEmpty())
                 .toList();
+        return categories.isEmpty() ? Config.defaultSystemBuyCategories() : categories;
     }
 
     public static List<SystemMarketOffer> offers() {
@@ -55,6 +57,23 @@ public record SystemMarketOffer(String id, ItemStack item, long unitPrice, Type 
         return syncedFallbackOfferLines != null ? syncedFallbackOfferLines : configOfferLines();
     }
 
+    public static long syncedStock(String offerId) {
+        if (offerId == null || offerId.isBlank()) {
+            return 0L;
+        }
+        for (String line : syncedStockLines) {
+            String[] parts = line.split("\\|", -1);
+            if (parts.length == 2 && parts[0].equals(offerId)) {
+                try {
+                    return Long.parseLong(parts[1]);
+                } catch (NumberFormatException ignored) {
+                    return 0L;
+                }
+            }
+        }
+        return 0L;
+    }
+
     public static List<String> configCategoryLines() {
         return Config.SYSTEM_BUY_CATEGORIES.get().stream().map(String::valueOf).toList();
     }
@@ -79,13 +98,18 @@ public record SystemMarketOffer(String id, ItemStack item, long unitPrice, Type 
     }
 
     public static void setSyncedConfig(List<String> categories, List<String> offers) {
-        setSyncedConfig(categories, offers, offers);
+        setSyncedConfig(categories, offers, offers, List.of());
     }
 
     public static void setSyncedConfig(List<String> categories, List<String> offers, List<String> fallbackOffers) {
+        setSyncedConfig(categories, offers, fallbackOffers, List.of());
+    }
+
+    public static void setSyncedConfig(List<String> categories, List<String> offers, List<String> fallbackOffers, List<String> stockLines) {
         syncedBuyCategories = List.copyOf(categories);
         syncedOfferLines = uniqueOfferLines(offers);
         syncedFallbackOfferLines = List.copyOf(fallbackOffers);
+        syncedStockLines = List.copyOf(stockLines);
     }
 
     public static SystemMarketOffer byId(String id) {

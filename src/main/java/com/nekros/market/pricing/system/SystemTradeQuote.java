@@ -9,6 +9,10 @@ public record SystemTradeQuote(
         return new SystemTradeQuote(false, 0L, 0L, message);
     }
 
+    public static SystemTradeQuote fail(String message, long unitPricePreview) {
+        return new SystemTradeQuote(false, 0L, unitPricePreview, message);
+    }
+
     public static SystemTradeQuote success(long totalPrice, long unitPricePreview) {
         return new SystemTradeQuote(true, totalPrice, unitPricePreview, "");
     }

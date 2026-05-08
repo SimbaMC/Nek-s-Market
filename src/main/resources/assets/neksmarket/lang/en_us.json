@@ -5,5 +5,6 @@
   "neksmarket.configuration.defaultListingDurationHours": "Default Listing Duration Hours",
   "neksmarket.configuration.listingFeeEnabled": "Enable Listing Fee",
   "neksmarket.configuration.listingFeeFlat": "Flat Listing Fee",
-  "neksmarket.configuration.listingFeePercent": "Listing Fee Percent"
+  "neksmarket.configuration.listingFeePercent": "Listing Fee Percent",
+  "block.neksmarket.seller_box": "系统回收箱"
 }
