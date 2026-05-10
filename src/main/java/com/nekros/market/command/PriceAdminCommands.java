@@ -191,11 +191,15 @@ public final class PriceAdminCommands {
     private static int explainItem(CommandSourceStack source, ResourceLocation itemId) {
         PriceProfile profile = PriceResolver.resolve(source.getServer(), itemId);
         EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        String sourceLabel = profile.source() == null ? "未知" : sourceName(profile.source());
+        String tierLabel = policy == null || policy.tier() == null ? "UNKNOWN" : policy.tier().name();
+        String confidenceLabel = profile.confidence() == null ? "NONE" : profile.confidence().name();
+        String tradeLevelLabel = profile.tradeLevel() == null ? "PLAYER_MARKET_ONLY" : profile.tradeLevel().name();
         source.sendSuccess(() -> Component.literal("价格解释: " + itemId), false);
-        source.sendSuccess(() -> Component.literal("来源: " + sourceName(profile.source())
-                + "，分级: " + policy.tier()
-                + "，置信度: " + profile.confidence()
-                + "，交易级别: " + profile.tradeLevel()), false);
+        source.sendSuccess(() -> Component.literal("来源: " + sourceLabel
+                + "，分级: " + tierLabel
+                + "，置信度: " + confidenceLabel
+                + "，交易级别: " + tradeLevelLabel), false);
         source.sendSuccess(() -> Component.literal("参考价: " + profile.referencePrice()
                 + "，系统回收基准: " + profile.systemBuyPrice()
                 + "，系统出售基准: " + profile.systemSellPrice()), false);
