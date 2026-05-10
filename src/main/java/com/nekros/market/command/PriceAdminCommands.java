@@ -232,7 +232,9 @@ public final class PriceAdminCommands {
         if (!parsed.ingredients().isEmpty()) {
             source.sendSuccess(() -> Component.literal("材料明细:"), false);
             for (ParsedIngredient ingredient : parsed.ingredients()) {
-                long unitPrice = ingredient.count() <= 0 ? ingredient.totalPrice() : ingredient.totalPrice() / ingredient.count();
+                String unitPrice = ingredient.count() <= 0
+                        ? "N/A"
+                        : Long.toString(ingredient.totalPrice() / ingredient.count());
                 source.sendSuccess(() -> Component.literal("- " + ingredient.label()
                         + " x" + ingredient.count()
                         + "，总价=" + ingredient.totalPrice()
@@ -314,7 +316,7 @@ public final class PriceAdminCommands {
                 continue;
             }
             int equalsIndex = item.lastIndexOf('=');
-            if (equalsIndex <= 0 || equalsIndex >= item.length() - 1) {
+            if (equalsIndex <= 0 || equalsIndex == item.length() - 1) {
                 continue;
             }
             String left = item.substring(0, equalsIndex).trim();
@@ -326,7 +328,7 @@ public final class PriceAdminCommands {
             String label = left;
             int countIndex = left.lastIndexOf(" x");
             if (countIndex > 0) {
-                count = Math.max(1, parseInt(left.substring(countIndex + 2).trim(), 1));
+                count = parseInt(left.substring(countIndex + 2).trim(), 1);
                 label = left.substring(0, countIndex).trim();
             }
             ingredients.add(new ParsedIngredient(label, count, totalPrice));
@@ -341,7 +343,7 @@ public final class PriceAdminCommands {
         Map<String, String> metrics = new java.util.LinkedHashMap<>();
         for (String token : text.split(",\\s*")) {
             int equalsIndex = token.indexOf('=');
-            if (equalsIndex <= 0 || equalsIndex >= token.length() - 1) {
+            if (equalsIndex <= 0 || equalsIndex == token.length() - 1) {
                 continue;
             }
             String key = token.substring(0, equalsIndex).trim();
