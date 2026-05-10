@@ -379,6 +379,32 @@ public final class PriceAdminCommands {
     }
 
     private static int report(CommandSourceStack source, int limit) {
+        PriceWarmupService.WarmupSnapshot snapshot = PriceWarmupService.status(source.getServer());
+        if (hasWarmupSnapshot(snapshot)) {
+            source.sendSuccess(() -> Component.literal("价格覆盖率(后台预热快照):"), false);
+            source.sendSuccess(() -> Component.literal("状态: " + snapshot.state()
+                    + "，候选物: " + snapshot.total()
+                    + "，已处理: " + snapshot.processed()
+                    + "，剩余: " + snapshot.remaining()), false);
+            source.sendSuccess(() -> Component.literal("可定价: " + snapshot.resolved()
+                    + "，未知: " + snapshot.unresolved()
+                    + "，缓存: " + snapshot.cachedCount()), false);
+            source.sendSuccess(() -> Component.literal("已处理覆盖率: "
+                    + coveragePercent(snapshot.processed(), snapshot.resolved()) + "%"), false);
+            source.sendSuccess(() -> Component.literal("来源统计: " + sourceCounts(snapshot.sourceCounts())), false);
+            source.sendSuccess(() -> Component.literal("交易级别统计: " + tradeLevelCounts(snapshot.tradeLevelCounts())), false);
+            int sampleLimit = Math.min(Math.max(0, limit), snapshot.unresolvedSamples().size());
+            source.sendSuccess(() -> Component.literal("未定价样本 " + sampleLimit
+                    + "/" + snapshot.unresolved() + ":"), false);
+            if (sampleLimit > 0) {
+                for (int i = 0; i < sampleLimit; i++) {
+                    ResourceLocation itemId = snapshot.unresolvedSamples().get(i);
+                    source.sendSuccess(() -> Component.literal("- " + itemId), false);
+                }
+            }
+            return snapshot.resolved();
+        }
+
         DerivedPriceService.CoverageReport report = DerivedPriceService.fastCoverage(source.getServer(), limit);
         source.sendSuccess(() -> Component.literal("价格覆盖率:"), false);
         source.sendSuccess(() -> Component.literal("候选物: " + report.candidateCount()
@@ -396,6 +422,10 @@ public final class PriceAdminCommands {
             }
         }
         return report.resolvedCount();
+    }
+
+    private static boolean hasWarmupSnapshot(PriceWarmupService.WarmupSnapshot snapshot) {
+        return snapshot != null && (snapshot.total() > 0 || snapshot.processed() > 0);
     }
 
     private static int auditBuyback(CommandSourceStack source, int limit) {
@@ -641,10 +671,14 @@ public final class PriceAdminCommands {
     }
 
     private static String coveragePercent(DerivedPriceService.CoverageReport report) {
-        if (report.candidateCount() <= 0) {
+        return coveragePercent(report.candidateCount(), report.resolvedCount());
+    }
+
+    private static String coveragePercent(int candidateCount, int resolvedCount) {
+        if (candidateCount <= 0) {
             return "0.00";
         }
-        return String.format(java.util.Locale.ROOT, "%.2f", report.resolvedCount() * 100.0D / report.candidateCount());
+        return String.format(java.util.Locale.ROOT, "%.2f", resolvedCount * 100.0D / candidateCount);
     }
 
     private static String sourceCounts(DerivedPriceService.CoverageReport report) {
