@@ -234,7 +234,7 @@ public final class PriceAdminCommands {
             for (ParsedIngredient ingredient : parsed.ingredients()) {
                 String unitPrice = ingredient.count() <= 0
                         ? "N/A"
-                        : Long.toString(ingredient.totalPrice() / ingredient.count());
+                        : String.format(java.util.Locale.ROOT, "%.2f", ingredient.totalPrice() / (double) ingredient.count());
                 source.sendSuccess(() -> Component.literal("- " + ingredient.label()
                         + " x" + ingredient.count()
                         + "，总价=" + ingredient.totalPrice()
@@ -269,7 +269,7 @@ public final class PriceAdminCommands {
         int recipeTypeEnd = explanation.indexOf("配方 ");
         int deriveStart = explanation.indexOf(" 推导:");
         int outputStart = explanation.lastIndexOf(" -> /");
-        if (recipeTypeEnd <= 1 || deriveStart <= recipeTypeEnd || outputStart <= deriveStart) {
+        if (recipeTypeEnd <= 1 || deriveStart <= recipeTypeEnd || outputStart < deriveStart) {
             return null;
         }
 
