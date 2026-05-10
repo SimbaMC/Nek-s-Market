@@ -209,7 +209,176 @@ public final class PriceAdminCommands {
             return 1;
         }
         source.sendSuccess(() -> Component.literal("推导说明: " + explanation), false);
+        sendStructuredRecipeExplanation(source, explanation, profile.referencePrice());
         return 1;
+    }
+
+    private static void sendStructuredRecipeExplanation(CommandSourceStack source, String explanation, long referencePrice) {
+        String baseExplanation = explanation;
+        int mixedMarker = explanation.indexOf(" 已混合近期玩家交易均价");
+        if (mixedMarker > 0) {
+            baseExplanation = explanation.substring(0, mixedMarker).trim();
+            String mixedPart = explanation.substring(mixedMarker + 1).trim();
+            source.sendSuccess(() -> Component.literal("市场混合说明: " + mixedPart), false);
+        }
+
+        ParsedRecipeExplanation parsed = parseRecipeExplanation(baseExplanation);
+        if (parsed == null) {
+            return;
+        }
+
+        source.sendSuccess(() -> Component.literal("完整配方解释:"), false);
+        source.sendSuccess(() -> Component.literal("选中配方: " + parsed.recipeKind() + " " + parsed.recipeId()), false);
+        if (!parsed.ingredients().isEmpty()) {
+            source.sendSuccess(() -> Component.literal("材料明细:"), false);
+            for (ParsedIngredient ingredient : parsed.ingredients()) {
+                long unitPrice = ingredient.count() <= 0 ? ingredient.totalPrice() : ingredient.totalPrice() / ingredient.count();
+                source.sendSuccess(() -> Component.literal("- " + ingredient.label()
+                        + " x" + ingredient.count()
+                        + "，总价=" + ingredient.totalPrice()
+                        + "，单价≈" + unitPrice), false);
+            }
+        }
+        if (parsed.materialTotal() != null) {
+            source.sendSuccess(() -> Component.literal("材料合计: " + parsed.materialTotal()), false);
+        }
+        if (parsed.processingFee() != null) {
+            source.sendSuccess(() -> Component.literal("加工费: " + parsed.processingFee()), false);
+        }
+        if (parsed.cookingFee() != null) {
+            source.sendSuccess(() -> Component.literal("烧制费: " + parsed.cookingFee()), false);
+        }
+        if (parsed.timeFee() != null) {
+            source.sendSuccess(() -> Component.literal("时间费: " + parsed.timeFee()), false);
+        }
+        if (parsed.markupPercent() != null) {
+            source.sendSuccess(() -> Component.literal("加成: " + parsed.markupPercent() + "%"), false);
+        }
+        if (parsed.resultCount() > 0) {
+            source.sendSuccess(() -> Component.literal("输出数量折算: /" + parsed.resultCount()
+                    + "，当前参考单价=" + referencePrice), false);
+        }
+    }
+
+    private static ParsedRecipeExplanation parseRecipeExplanation(String explanation) {
+        if (explanation == null || explanation.isBlank() || !explanation.startsWith("由")) {
+            return null;
+        }
+        int recipeTypeEnd = explanation.indexOf("配方 ");
+        int deriveStart = explanation.indexOf(" 推导:");
+        int outputStart = explanation.lastIndexOf(" -> /");
+        if (recipeTypeEnd <= 1 || deriveStart <= recipeTypeEnd || outputStart <= deriveStart) {
+            return null;
+        }
+
+        String recipeKind = explanation.substring(1, recipeTypeEnd);
+        String recipeId = explanation.substring(recipeTypeEnd + "配方 ".length(), deriveStart).trim();
+        String body = explanation.substring(deriveStart + " 推导:".length(), outputStart).trim();
+        int resultCount = parseInt(explanation.substring(outputStart + " -> /".length()).trim(), 0);
+
+        String ingredientPart = body;
+        String metricsPart = "";
+        int metricStart = body.indexOf("; ");
+        if (metricStart >= 0) {
+            ingredientPart = body.substring(0, metricStart).trim();
+            metricsPart = body.substring(metricStart + 2).trim();
+        }
+
+        java.util.List<ParsedIngredient> ingredients = parseIngredients(ingredientPart);
+        Map<String, String> metrics = parseMetrics(metricsPart);
+        Long materialTotal = parseLong(metrics.get("材料"), null);
+        Long processingFee = parseLong(metrics.get("加工"), null);
+        Long cookingFee = parseLong(metrics.get("烧制"), null);
+        Long timeFee = parseLong(metrics.get("时间"), null);
+        Integer markupPercent = parsePercent(metrics.get("加成"));
+        return new ParsedRecipeExplanation(
+                recipeKind,
+                recipeId,
+                ingredients,
+                materialTotal,
+                processingFee,
+                cookingFee,
+                timeFee,
+                markupPercent,
+                resultCount);
+    }
+
+    private static java.util.List<ParsedIngredient> parseIngredients(String text) {
+        if (text == null || text.isBlank()) {
+            return java.util.List.of();
+        }
+        java.util.List<ParsedIngredient> ingredients = new java.util.ArrayList<>();
+        for (String token : text.split(",\\s*")) {
+            String item = token.trim();
+            if (item.isEmpty()) {
+                continue;
+            }
+            int equalsIndex = item.lastIndexOf('=');
+            if (equalsIndex <= 0 || equalsIndex >= item.length() - 1) {
+                continue;
+            }
+            String left = item.substring(0, equalsIndex).trim();
+            long totalPrice = parseLong(item.substring(equalsIndex + 1).trim(), -1L);
+            if (totalPrice < 0L) {
+                continue;
+            }
+            int count = 1;
+            String label = left;
+            int countIndex = left.lastIndexOf(" x");
+            if (countIndex > 0) {
+                count = Math.max(1, parseInt(left.substring(countIndex + 2).trim(), 1));
+                label = left.substring(0, countIndex).trim();
+            }
+            ingredients.add(new ParsedIngredient(label, count, totalPrice));
+        }
+        return java.util.List.copyOf(ingredients);
+    }
+
+    private static Map<String, String> parseMetrics(String text) {
+        if (text == null || text.isBlank()) {
+            return Map.of();
+        }
+        Map<String, String> metrics = new java.util.LinkedHashMap<>();
+        for (String token : text.split(",\\s*")) {
+            int equalsIndex = token.indexOf('=');
+            if (equalsIndex <= 0 || equalsIndex >= token.length() - 1) {
+                continue;
+            }
+            String key = token.substring(0, equalsIndex).trim();
+            String value = token.substring(equalsIndex + 1).trim();
+            metrics.put(key, value);
+        }
+        return metrics;
+    }
+
+    private static Integer parsePercent(String text) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        String normalized = text.endsWith("%") ? text.substring(0, text.length() - 1).trim() : text.trim();
+        return parseInt(normalized, null);
+    }
+
+    private static Integer parseInt(String text, Integer fallback) {
+        if (text == null || text.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Integer.parseInt(text.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
+    }
+
+    private static Long parseLong(String text, Long fallback) {
+        if (text == null || text.isBlank()) {
+            return fallback;
+        }
+        try {
+            return Long.parseLong(text.trim());
+        } catch (NumberFormatException ignored) {
+            return fallback;
+        }
     }
 
     private static int policyHand(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -747,6 +916,21 @@ public final class PriceAdminCommands {
             com.nekros.market.pricing.PriceConfidence confidence,
             BuybackListDecision listDecision,
             String reason) {
+    }
+
+    private record ParsedRecipeExplanation(
+            String recipeKind,
+            String recipeId,
+            java.util.List<ParsedIngredient> ingredients,
+            Long materialTotal,
+            Long processingFee,
+            Long cookingFee,
+            Long timeFee,
+            Integer markupPercent,
+            int resultCount) {
+    }
+
+    private record ParsedIngredient(String label, int count, long totalPrice) {
     }
 
     private static ResourceLocation itemId(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context, String name) {
