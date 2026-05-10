@@ -1,9 +1,11 @@
-# NeksMarket 开发接力说明：当前状态与测试指南
+﻿# NeksMarket 开发接力说明：当前状态与测试指南
 
 更新时间：2026-05-08  
 项目环境：Minecraft 1.21.1 / NeoForge 21.1.228 / Java 21  
-主要执行计划参考：`NeksMarket_Codex执行用_动态经济系统计划_加入系统商店货架与定价权.md`  
-早期参考资料：`MC自动化定价模型.md`
+当前主经济方案：`NeksMarket_经济系统新方案_真实与游戏平衡版.md`  
+当前核心算法参考：`Final.md`  
+历史执行计划参考：`NeksMarket_Codex执行用_动态经济系统计划_加入系统商店货架与定价权.md`  
+早期讨论资料：`MC自动化定价模型.md`
 
 ## 1. 当前总体状态
 
@@ -28,7 +30,7 @@ NeksMarket 当前已经从基础玩家交易市场，扩展到了系统商店、
 - 全量价格推导曾经在启动或命令执行时卡住服务器主线程。
 - 现在启动时不再自动全量 warmup。
 - `/market price reload` 不再全量预热，只重载注册表。
-- `/market price coverage` 和 `/market price unresolved` 目前使用快速统计，不做递归全图计算，避免再次卡死。
+- `/market price report` 目前使用快速统计，不做递归全图计算，避免再次卡死。
 - 配方递归推导已经增加中间节点缓存，后续做后台全量计算时可继续复用。
 
 ## 2. 当前开发环境说明
@@ -108,23 +110,23 @@ NeksMarket 当前已经从基础玩家交易市场，扩展到了系统商店、
 
 ```mcfunction
 /market system reload
-/market system quote sell_to_player <物品> [数量]
-/market system quote buy_from_player <物品> [数量]
+/market system quote sell <物品> [数量]
+/market system quote buy <物品> [数量]
 /market system stock <物品>
-/market system stock sell_to_player <物品>
-/market system stock buy_from_player <物品>
+/market system stock sell <物品>
+/market system stock buy <物品>
 ```
 
 添加系统售卖货架：
 
 ```mcfunction
-/market system shelf <物品> <分类序号> [flags]
+/market system sell <物品> <分类序号> [flags]
 ```
 
 示例：
 
 ```mcfunction
-/market system shelf minecraft:oak_log 1 infinite_stock
+/market system sell minecraft:oak_log 1 infinite_stock
 ```
 
 注意：
@@ -136,21 +138,21 @@ NeksMarket 当前已经从基础玩家交易市场，扩展到了系统商店、
 添加系统回收：
 
 ```mcfunction
-/market system buyback <物品> [flags]
+/market system buy <物品> [flags]
 ```
 
 按标签批量添加：
 
 ```mcfunction
-/market system shelftag <标签ID> <分类序号> [flags]
-/market system buybacktag <标签ID> [flags]
+/market system selltag <标签ID> <分类序号> [flags]
+/market system buytag <标签ID> [flags]
 ```
 
 示例：
 
 ```mcfunction
-/market system shelftag minecraft:logs 1 infinite_stock
-/market system buybacktag minecraft:logs
+/market system selltag minecraft:logs 1 infinite_stock
+/market system buytag minecraft:logs
 ```
 
 ### 3.3 系统库存与动态调价
@@ -254,6 +256,27 @@ neksmarket:seller_box
 - `MIXED`：基础价和玩家市场成交价混合。
 - `UNKNOWN`：未知。
 
+当前已经新增经济分级诊断层：
+
+- `COMMON_RENEWABLE`：常见可再生资源。
+- `COMMON_NON_RENEWABLE`：普通资源。
+- `INDUSTRIAL_RENEWABLE`：高自动化产物。
+- `RARE_RESOURCE`：稀有资源。
+- `BOSS_DROP`：Boss 或唯一物品。
+- `PROGRESSION_LOCKED`：推进关键物品。
+- `PLAYER_MARKET_ONLY`：只允许玩家市场。
+- `UNKNOWN`：未知。
+
+注意：
+
+- 经济分级目前先用于 `/market price policy` 和 `/market price item` 的诊断输出。
+- 系统回收价已经开始接入 `Final.md` 的 `S/C/Δ` 惰性求值模型。
+- 当前接入范围：系统从玩家回收、出货箱回收。
+- 当前未改变：系统卖给玩家的库存售价曲线。
+- `S` 使用累计从玩家回收数量。
+- `C` 使用新增的 `buyMemory` 中期记忆字段，旧存档缺省为 0。
+- `Δ` 使用本次报价/交易数量，只影响本次回收滑点。
+
 核心类：
 
 - `PriceProfile`
@@ -292,7 +315,7 @@ neksmarket:seller_box
 查看主手物品价格：
 
 ```mcfunction
-/market price hand
+/market price item
 ```
 
 查看指定物品价格：
@@ -310,8 +333,15 @@ neksmarket:seller_box
 查看玩家市场成交历史：
 
 ```mcfunction
-/market price history hand
-/market price history item <物品>
+/market price history
+/market price history <物品>
+```
+
+查看经济分级和压力策略：
+
+```mcfunction
+/market price policy
+/market price policy <物品>
 ```
 
 重载定价注册表：
@@ -329,7 +359,7 @@ neksmarket:seller_box
 快速覆盖率：
 
 ```mcfunction
-/market price coverage
+/market price report
 ```
 
 当前安全行为：
@@ -341,7 +371,7 @@ neksmarket:seller_box
 无法定价样本：
 
 ```mcfunction
-/market price unresolved 50
+/market price report 50
 ```
 
 当前安全行为：
@@ -356,8 +386,7 @@ neksmarket:seller_box
 之前出现过严重问题：
 
 - `/market price reload`
-- `/market price coverage`
-- `/market price unresolved`
+- `/market price report`
 
 一度会触发全量递归配方图计算，导致服务器主线程卡住，表现为：
 
@@ -415,7 +444,7 @@ run/mods.disabled
 - 新建一个服务，例如 `PriceGraphWarmupService`。
 - 服务器启动时只初始化任务，不立即跑完。
 - 每 tick 只处理有限数量候选物，例如 10 到 30 个。
-- 命令 `/market price coverage` 读取最近一次快照，不现场全量计算。
+- 命令 `/market price report` 读取最近一次快照，不现场全量计算。
 - 命令 `/market price warmup start` 手动启动后台预热。
 - 命令 `/market price warmup status` 查看进度。
 - 命令 `/market price warmup cancel` 取消。
@@ -545,8 +574,8 @@ Nek's Market pricing registry loaded. Price graph warmup is skipped during world
 /market balance
 /market listings
 /market price reload
-/market price coverage
-/market price unresolved 20
+/market price report
+/market price report 20
 ```
 
 预期：
@@ -640,7 +669,7 @@ Nek's Market pricing registry loaded. Price graph warmup is skipped during world
 优先顺序建议：
 
 1. 做 `PriceGraphWarmupService`，把全量价格图计算变成后台分 tick。
-2. 让 `/market price coverage` 读取后台快照，而不是现场计算。
+2. 让 `/market price report` 读取后台快照，而不是现场计算。
 3. 加 `/market price warmup start/status/cancel`。
 4. 再逐步扩大自然资源规则和等价物规则。
 5. 最后再考虑 Create/AE2 的 adapter。

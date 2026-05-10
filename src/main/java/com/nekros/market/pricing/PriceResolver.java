@@ -1,8 +1,12 @@
 package com.nekros.market.pricing;
 
-import com.nekros.market.Config;
-import com.nekros.market.pricing.market.MarketPriceIndexService;
+import com.nekros.market.pricing.config.PricingConfig;
 import com.nekros.market.pricing.derived.DerivedPriceService;
+import com.nekros.market.pricing.market.MarketPriceIndexService;
+import com.nekros.market.pricing.policy.EconomicPolicy;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry.BuybackListDecision;
+import com.nekros.market.pricing.policy.EconomicTier;
 
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -55,11 +59,13 @@ public final class PriceResolver {
         String explanation;
 
         if ((hasAnchor || hasDerived) && hasMarket) {
-            referencePrice = Math.max(1L, Math.round(baseline.derivedPrice() * (1.0D - marketConfidence) + marketPrice * marketConfidence));
+            long boundedMarketPrice = boundedMarketPrice(baseline.derivedPrice(), marketPrice);
+            referencePrice = Math.max(1L, Math.round(baseline.derivedPrice() * (1.0D - marketConfidence)
+                    + boundedMarketPrice * marketConfidence));
             source = PriceSource.MIXED;
             confidence = confidenceFrom(marketConfidence, true, hasAnchor);
             tradeLevel = baseline.tradeLevel();
-            explanation = baseline.explanation() + " 已混合近期玩家市场成交均价。";
+            explanation = mixedExplanation(baseline, marketPrice, boundedMarketPrice, marketConfidence);
         } else if (hasAnchor || hasDerived) {
             referencePrice = baseline.derivedPrice();
             source = baseline.source();
@@ -71,14 +77,15 @@ public final class PriceResolver {
             source = PriceSource.PLAYER_MARKET;
             confidence = confidenceFrom(marketConfidence, false, false);
             tradeLevel = TradeLevel.PLAYER_MARKET_ONLY;
-            explanation = "近期玩家市场成交均价。";
+            explanation = "近期玩家交易成交均价。";
         }
 
-        long systemBuyPrice = allowsSystemBuy(tradeLevel)
-                ? Math.max(1L, (long) Math.floor(referencePrice * Config.PRICING_DEFAULT_BUY_RATIO.get()))
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        long systemBuyPrice = allowsAutomaticBuyPrice(itemId, policy, tradeLevel, confidence)
+                ? Math.max(1L, (long) Math.floor(referencePrice * EconomicPolicyRegistry.buyRatio(itemId)))
                 : 0L;
         long systemSellPrice = allowsSystemSell(tradeLevel)
-                ? Math.max(1L, (long) Math.ceil(referencePrice * Config.PRICING_DEFAULT_SELL_RATIO.get()))
+                ? Math.max(1L, (long) Math.ceil(referencePrice * EconomicPolicyRegistry.sellRatio(itemId)))
                 : 0L;
 
         return new PriceProfile(
@@ -101,6 +108,69 @@ public final class PriceResolver {
 
     public static boolean allowsSystemSell(TradeLevel tradeLevel) {
         return tradeLevel == TradeLevel.SYSTEM_BUY_AND_SELL;
+    }
+
+    public static boolean allowsAutomaticBuyConfidence(PriceConfidence confidence) {
+        return confidenceRank(confidence) >= confidenceRank(minAutomaticBuyConfidence());
+    }
+
+    public static boolean allowsAutomaticBuyPrice(ResourceLocation itemId, EconomicPolicy policy,
+            TradeLevel tradeLevel, PriceConfidence confidence) {
+        if (itemId == null || policy == null || tradeLevel == null || !allowsAutomaticBuyConfidence(confidence)) {
+            return false;
+        }
+        BuybackListDecision listDecision = EconomicPolicyRegistry.buybackListDecision(itemId);
+        if (listDecision == BuybackListDecision.DENY || tradeLevel == TradeLevel.BLOCKED) {
+            return false;
+        }
+        if (listDecision == BuybackListDecision.ALLOW) {
+            return tradeLevel != TradeLevel.PLAYER_MARKET_ONLY;
+        }
+        return policy.tier() != EconomicTier.UNKNOWN
+                && policy.systemBuyAllowed()
+                && allowsSystemBuy(tradeLevel);
+    }
+
+    private static PriceConfidence minAutomaticBuyConfidence() {
+        try {
+            return PriceConfidence.valueOf(PricingConfig.minAutomaticBuyConfidence()
+                    .trim()
+                    .toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException | NullPointerException exception) {
+            return PriceConfidence.MEDIUM;
+        }
+    }
+
+    private static int confidenceRank(PriceConfidence confidence) {
+        if (confidence == null) {
+            return 0;
+        }
+        return switch (confidence) {
+            case NONE -> 0;
+            case LOW -> 1;
+            case MEDIUM -> 2;
+            case HIGH -> 3;
+        };
+    }
+
+    private static long boundedMarketPrice(long baselinePrice, long marketPrice) {
+        if (baselinePrice <= 0L || marketPrice <= 0L) {
+            return marketPrice;
+        }
+        double minRatio = Math.max(0.0D, PricingConfig.marketBaselineMinRatio());
+        double maxRatio = Math.max(minRatio, PricingConfig.marketBaselineMaxRatio());
+        long min = Math.max(1L, (long) Math.floor(baselinePrice * minRatio));
+        long max = Math.max(min, (long) Math.ceil(baselinePrice * maxRatio));
+        return Math.max(min, Math.min(max, marketPrice));
+    }
+
+    private static String mixedExplanation(PriceProfile baseline, long marketPrice, long boundedMarketPrice,
+            double marketConfidence) {
+        return baseline.explanation()
+                + " 已混合近期玩家交易均价，VWAP=" + marketPrice
+                + "，边界后=" + boundedMarketPrice
+                + "，置信=" + String.format(java.util.Locale.ROOT, "%.2f", marketConfidence)
+                + "。";
     }
 
     private static PriceConfidence confidenceFrom(double confidence, boolean hasBaseline, boolean highBaseline) {

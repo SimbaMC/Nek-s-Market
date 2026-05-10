@@ -10,6 +10,7 @@ import com.nekros.market.Config;
 import com.nekros.market.claim.MarketClaim;
 import com.nekros.market.economy.MarketEconomy;
 import com.nekros.market.pricing.market.MarketTradeHistoryService;
+import com.nekros.market.storage.EconomyLedgerSavedData;
 import com.nekros.market.storage.MarketSavedData;
 import com.nekros.market.util.InventoryUtil;
 
@@ -49,6 +50,10 @@ public final class MarketService {
         long fee = Config.listingFee(price);
         if (fee > 0L && !MarketEconomy.withdraw(data, seller.getUUID(), fee)) {
             return SellResult.fail("上架费需要 " + fee + " " + MarketEconomy.CURRENCY_NAME + "。");
+        }
+
+        if (fee > 0L) {
+            EconomyLedgerSavedData.get(seller.server).recordListingFee(fee);
         }
 
         if (!InventoryUtil.removeMatching(seller.getInventory(), template, count)) {
@@ -104,8 +109,11 @@ public final class MarketService {
         } else {
             data.listings().remove(listingId);
         }
+        long tax = Config.marketTradeTax(totalPrice);
+        long sellerPayout = Math.max(0L, totalPrice - tax);
+        EconomyLedgerSavedData.get(buyer.server).recordPlayerTrade(totalPrice, tax);
         InventoryUtil.addSplit(buyer.getInventory(), listing.item(), boughtCount);
-        data.claimFor(listing.sellerId()).addMoney(totalPrice);
+        data.claimFor(listing.sellerId()).addMoney(sellerPayout);
         data.setDirty();
 
         MarketTradeHistoryService.recordPlayerTrade(
@@ -116,7 +124,7 @@ public final class MarketService {
                 listing.price(),
                 boughtCount);
 
-        return BuyResult.success(listing.withCount(boughtCount), totalPrice);
+        return BuyResult.success(listing.withCount(boughtCount), totalPrice, tax);
     }
 
     public static CancelResult cancel(MarketSavedData data, ServerPlayer seller, UUID listingId) {
@@ -218,13 +226,13 @@ public final class MarketService {
         }
     }
 
-    public record BuyResult(boolean success, String message, MarketListing listing, long totalPrice) {
-        static BuyResult success(MarketListing listing, long totalPrice) {
-            return new BuyResult(true, "", listing, totalPrice);
+    public record BuyResult(boolean success, String message, MarketListing listing, long totalPrice, long tax) {
+        static BuyResult success(MarketListing listing, long totalPrice, long tax) {
+            return new BuyResult(true, "", listing, totalPrice, tax);
         }
 
         static BuyResult fail(String message) {
-            return new BuyResult(false, message, null, 0L);
+            return new BuyResult(false, message, null, 0L, 0L);
         }
     }
 

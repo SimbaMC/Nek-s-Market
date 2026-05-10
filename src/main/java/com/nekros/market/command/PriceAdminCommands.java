@@ -1,14 +1,25 @@
 package com.nekros.market.command;
 
+import java.util.Comparator;
+import java.util.Map;
+
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.nekros.market.pricing.PriceProfile;
 import com.nekros.market.pricing.PriceRegistry;
 import com.nekros.market.pricing.PriceResolver;
 import com.nekros.market.pricing.PriceSource;
+import com.nekros.market.pricing.TradeLevel;
 import com.nekros.market.pricing.derived.DerivedPriceService;
+import com.nekros.market.pricing.derived.PriceWarmupService;
 import com.nekros.market.pricing.market.MarketPriceIndexService;
 import com.nekros.market.pricing.market.MarketTradeRecord;
+import com.nekros.market.pricing.policy.EconomicPolicy;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry.BuybackListDecision;
+import com.nekros.market.pricing.policy.EconomicTier;
+import com.nekros.market.pricing.system.SystemBuyPressure;
+import com.nekros.market.pricing.system.SystemPriceService;
 import com.nekros.market.storage.EconomySavedData;
 
 import net.minecraft.commands.CommandSourceStack;
@@ -27,34 +38,93 @@ public final class PriceAdminCommands {
 
     public static LiteralArgumentBuilder<CommandSourceStack> priceCommand(CommandBuildContext buildContext) {
         return Commands.literal("price")
-                .then(Commands.literal("hand")
-                        .executes(context -> priceHand(context.getSource())))
+                .executes(context -> priceHelp(context.getSource()))
                 .then(Commands.literal("item")
+                        .executes(context -> priceHand(context.getSource()))
                         .then(Commands.argument("item", ItemArgument.item(buildContext))
                                 .executes(context -> priceItem(
                                         context.getSource(),
                                         itemId(context, "item")))))
                 .then(Commands.literal("history")
-                        .then(Commands.literal("hand")
-                                .executes(context -> historyHand(context.getSource())))
-                        .then(Commands.literal("item")
-                                .then(Commands.argument("item", ItemArgument.item(buildContext))
-                                        .executes(context -> historyItem(
+                        .executes(context -> historyHand(context.getSource()))
+                        .then(Commands.argument("item", ItemArgument.item(buildContext))
+                                .executes(context -> historyItem(
+                                        context.getSource(),
+                                        itemId(context, "item")))))
+                .then(policyCommand(buildContext))
+                .then(Commands.literal("curve")
+                        .requires(source -> source.hasPermission(2))
+                        .executes(context -> curveHand(context.getSource(), 4096))
+                        .then(Commands.argument("item", ItemArgument.item(buildContext))
+                                .executes(context -> curveItem(
+                                        context.getSource(),
+                                        itemId(context, "item"),
+                                        4096))
+                                .then(Commands.argument("maxCount", IntegerArgumentType.integer(1, 1000000))
+                                        .executes(context -> curveItem(
                                                 context.getSource(),
-                                                itemId(context, "item"))))))
+                                                itemId(context, "item"),
+                                                IntegerArgumentType.getInteger(context, "maxCount"))))))
                 .then(Commands.literal("reload")
                         .requires(source -> source.hasPermission(2))
                         .executes(context -> reload(context.getSource())))
-                .then(Commands.literal("coverage")
+                .then(Commands.literal("report")
                         .requires(source -> source.hasPermission(2))
-                        .executes(context -> coverage(context.getSource())))
-                .then(Commands.literal("unresolved")
-                        .requires(source -> source.hasPermission(2))
-                        .executes(context -> unresolved(context.getSource(), 20))
+                        .executes(context -> report(context.getSource(), 20))
                         .then(Commands.argument("limit", IntegerArgumentType.integer(1, 200))
-                                .executes(context -> unresolved(
+                                .executes(context -> report(
                                         context.getSource(),
-                                        IntegerArgumentType.getInteger(context, "limit")))));
+                                        IntegerArgumentType.getInteger(context, "limit")))))
+                .then(Commands.literal("audit")
+                        .requires(source -> source.hasPermission(2))
+                        .executes(context -> auditBuyback(context.getSource(), 30))
+                        .then(Commands.literal("allowed")
+                                .executes(context -> auditBuyback(context.getSource(), 30))
+                                .then(Commands.argument("limit", IntegerArgumentType.integer(1, 200))
+                                        .executes(context -> auditBuyback(
+                                                context.getSource(),
+                                                IntegerArgumentType.getInteger(context, "limit")))))
+                        .then(Commands.literal("blocked")
+                                .executes(context -> auditBlockedBuyback(context.getSource(), 30))
+                                .then(Commands.argument("limit", IntegerArgumentType.integer(1, 200))
+                                        .executes(context -> auditBlockedBuyback(
+                                                context.getSource(),
+                                                IntegerArgumentType.getInteger(context, "limit")))))
+                        .then(Commands.argument("limit", IntegerArgumentType.integer(1, 200))
+                                .executes(context -> auditBuyback(
+                                        context.getSource(),
+                                        IntegerArgumentType.getInteger(context, "limit")))))
+                .then(Commands.literal("recipes")
+                        .requires(source -> source.hasPermission(2))
+                        .executes(context -> recipeTypes(context.getSource(), 20))
+                        .then(Commands.argument("limit", IntegerArgumentType.integer(1, 200))
+                                .executes(context -> recipeTypes(
+                                        context.getSource(),
+                                        IntegerArgumentType.getInteger(context, "limit")))))
+                .then(Commands.literal("warmup")
+                        .requires(source -> source.hasPermission(2))
+                        .then(Commands.literal("start")
+                                .executes(context -> warmupStart(context.getSource(), 8))
+                                .then(Commands.argument("itemsPerTick", IntegerArgumentType.integer(1, 64))
+                                        .executes(context -> warmupStart(
+                                                context.getSource(),
+                                                IntegerArgumentType.getInteger(context, "itemsPerTick")))))
+                        .then(Commands.literal("status")
+                                .executes(context -> warmupStatus(context.getSource())))
+                        .then(Commands.literal("cancel")
+                                .executes(context -> warmupCancel(context.getSource()))));
+    }
+
+    private static int priceHelp(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal("价格诊断命令:"), false);
+        source.sendSuccess(() -> Component.literal("/market price item [物品] - 查看价格，不填则读取主手"), false);
+        source.sendSuccess(() -> Component.literal("/market price history [物品] - 查看近期成交，不填则读取主手"), false);
+        source.sendSuccess(() -> Component.literal("/market price policy [物品] - 查看经济分级，不填则读取主手"), false);
+        source.sendSuccess(() -> Component.literal("/market price report [数量] - 查看覆盖率和未定价样本"), false);
+        source.sendSuccess(() -> Component.literal("/market price reload - 重载定价配置"), false);
+        source.sendSuccess(() -> Component.literal("/market price warmup start|status|cancel - 后台预热价格图"), false);
+        source.sendSuccess(() -> Component.literal("/market price recipes [数量] - 查看配方类型和通用策略"), false);
+        return 1;
     }
 
     private static int priceHand(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
@@ -75,6 +145,15 @@ public final class PriceAdminCommands {
         return 1;
     }
 
+    private static LiteralArgumentBuilder<CommandSourceStack> policyCommand(CommandBuildContext buildContext) {
+        return Commands.literal("policy")
+                .executes(context -> policyHand(context.getSource()))
+                .then(Commands.argument("item", ItemArgument.item(buildContext))
+                        .executes(context -> policyItem(
+                                context.getSource(),
+                                itemId(context, "item"))));
+    }
+
     private static int historyHand(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayer player = source.getPlayerOrException();
         ItemStack stack = player.getMainHandItem();
@@ -91,7 +170,95 @@ public final class PriceAdminCommands {
         return 1;
     }
 
+    private static int policyHand(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        ItemStack stack = player.getMainHandItem();
+        if (stack.isEmpty()) {
+            source.sendFailure(Component.literal("主手为空。"));
+            return 0;
+        }
+        return policyItem(source, BuiltInRegistries.ITEM.getKey(stack.getItem()));
+    }
+
+    private static int policyItem(CommandSourceStack source, ResourceLocation itemId) {
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        PriceProfile profile = PriceResolver.resolve(source.getServer(), itemId);
+        source.sendSuccess(() -> Component.literal("物品: " + itemId), false);
+        source.sendSuccess(() -> Component.literal("经济分级: " + policy.tier()), false);
+        source.sendSuccess(() -> Component.literal("系统回收策略: " + yesNo(policy.systemBuyAllowed())), false);
+        source.sendSuccess(() -> Component.literal("实际可回收: " + yesNo(SystemPriceService.allowsAutomaticBuyback(itemId, profile))), false);
+        source.sendSuccess(() -> Component.literal("系统默认出售: " + yesNo(policy.systemSellAllowedByDefault())), false);
+        source.sendSuccess(() -> Component.literal("压力模型: " + policy.pressureModel()), false);
+        source.sendSuccess(() -> Component.literal("基础买卖比例: buy="
+                + fmt(EconomicPolicyRegistry.buyRatio(itemId))
+                + ", sell=" + fmt(EconomicPolicyRegistry.sellRatio(itemId))), false);
+        source.sendSuccess(() -> Component.literal("参数: alpha=" + fmt(policy.longAlpha())
+                + ", gamma=" + fmt(policy.gamma())
+                + ", beta=" + fmt(policy.memoryBeta())
+                + ", lambda=" + fmt(policy.memoryLambda())
+                + ", delta=" + fmt(policy.tradeDelta())
+                + ", minBuyRatio=" + fmt(policy.minBuyRatio())), false);
+        source.sendSuccess(() -> Component.literal("说明: " + policy.explanation()), false);
+        return 1;
+    }
+
+    private static int curveHand(CommandSourceStack source, int maxCount)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        ItemStack stack = player.getMainHandItem();
+        if (stack.isEmpty()) {
+            source.sendFailure(Component.literal("主手为空。"));
+            return 0;
+        }
+        return curveItem(source, BuiltInRegistries.ITEM.getKey(stack.getItem()), maxCount);
+    }
+
+    private static int curveItem(CommandSourceStack source, ResourceLocation itemId, int maxCount) {
+        PriceProfile profile = PriceResolver.resolve(source.getServer(), itemId);
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        source.sendSuccess(() -> Component.literal("回收压力曲线: " + itemId), false);
+        source.sendSuccess(() -> Component.literal("经济分级: " + policy.tier()
+                + "，基础回收价: " + profile.systemBuyPrice()
+                + "，可回收: " + yesNo(SystemPriceService.allowsAutomaticBuyback(itemId, profile))), false);
+        if (!SystemPriceService.allowsAutomaticBuyback(itemId, profile)) {
+            source.sendSuccess(() -> Component.literal("该物品当前不能自动回收，原因可用 /market price policy 查看。"), false);
+            return 0;
+        }
+
+        int[] counts = curveCounts(maxCount);
+        for (int count : counts) {
+            SystemBuyPressure.Quote quote = SystemBuyPressure.quote(source.getServer(), itemId, profile.systemBuyPrice(), count);
+            source.sendSuccess(() -> Component.literal("x" + count
+                    + " -> 均价 " + quote.averageUnitPrice()
+                    + "，总价 " + quote.totalPrice()
+                    + "，倍率 " + fmt(quote.averageRatio())), false);
+        }
+        SystemBuyPressure.Quote maxQuote = SystemBuyPressure.quote(source.getServer(), itemId, profile.systemBuyPrice(), maxCount);
+        source.sendSuccess(() -> Component.literal(maxQuote.explanation()), false);
+        return counts.length;
+    }
+
+    private static int[] curveCounts(int maxCount) {
+        int[] base = {1, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1000000};
+        java.util.List<Integer> counts = new java.util.ArrayList<>();
+        for (int value : base) {
+            if (value <= maxCount) {
+                counts.add(value);
+            }
+        }
+        if (counts.isEmpty() || counts.get(counts.size() - 1) != maxCount) {
+            counts.add(maxCount);
+        }
+        return counts.stream().mapToInt(Integer::intValue).toArray();
+    }
+
     private static void sendProfile(CommandSourceStack source, PriceProfile profile) {
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(profile.itemId());
+        long pressureBuyPrice = profile.systemBuyPrice() > 0L
+                ? SystemPriceService.dynamicBuyPriceForStock(source.getServer(), profile.itemId(), profile.systemBuyPrice(), 0)
+                : 0L;
+        source.sendSuccess(() -> Component.literal("经济分级: " + policy.tier()), false);
+        source.sendSuccess(() -> Component.literal("当前回收价(含压力): " + pressureBuyPrice), false);
         source.sendSuccess(() -> Component.literal("物品: " + profile.itemId()), false);
         source.sendSuccess(() -> Component.literal("来源: " + sourceName(profile.source())), false);
         source.sendSuccess(() -> Component.literal("置信度: " + profile.confidence()), false);
@@ -103,6 +270,16 @@ public final class PriceAdminCommands {
         source.sendSuccess(() -> Component.literal("系统回收价: " + profile.systemBuyPrice()), false);
         source.sendSuccess(() -> Component.literal("系统售价: " + profile.systemSellPrice()), false);
         source.sendSuccess(() -> Component.literal("说明: " + profile.explanation()), false);
+    }
+
+    private static String usageText(PriceProfile profile) {
+        return switch (profile.tradeLevel()) {
+            case BLOCKED -> "禁止交易";
+            case PLAYER_MARKET_ONLY -> "玩家交易行";
+            case REFERENCE_ONLY -> "仅参考";
+            case SYSTEM_BUY_ONLY -> "可系统回收";
+            case SYSTEM_BUY_AND_SELL -> "可系统回收，有系统售价基准；实际出售仍由货架控制";
+        };
     }
 
     private static String sourceName(PriceSource source) {
@@ -119,8 +296,13 @@ public final class PriceAdminCommands {
 
     private static void sendHistory(CommandSourceStack source, ResourceLocation itemId) {
         int tradeCount = MarketPriceIndexService.recentTradeCount(source.getServer(), itemId);
+        double effectiveTradeCount = MarketPriceIndexService.effectiveTradeCount(source.getServer(), itemId);
+        int participants = MarketPriceIndexService.uniqueParticipantCount(source.getServer(), itemId);
         long vwap = MarketPriceIndexService.recentVWAP(source.getServer(), itemId);
         double confidence = MarketPriceIndexService.confidence(source.getServer(), itemId);
+        source.sendSuccess(() -> Component.literal("时间衰减成交数: "
+                + String.format(java.util.Locale.ROOT, "%.2f", effectiveTradeCount)), false);
+        source.sendSuccess(() -> Component.literal("独立参与者: " + participants), false);
         source.sendSuccess(() -> Component.literal("物品: " + itemId), false);
         source.sendSuccess(() -> Component.literal("近期成交数: " + tradeCount), false);
         source.sendSuccess(() -> Component.literal("近期成交均价: " + vwap), false);
@@ -140,14 +322,22 @@ public final class PriceAdminCommands {
         }
     }
 
+    private static String yesNo(boolean value) {
+        return value ? "允许" : "禁止";
+    }
+
+    private static String fmt(double value) {
+        return String.format(java.util.Locale.ROOT, "%.4f", value);
+    }
+
     private static int reload(CommandSourceStack source) {
         PriceRegistry.reload();
-        source.sendSuccess(() -> Component.literal("已重载 Nek's Market 定价注册表。已跳过全量预热，避免卡住服务器。"), true);
+        source.sendSuccess(() -> Component.literal("已重载 Nek's Market 定价注册表与经济策略。已跳过全量预热，避免卡住服务器。"), true);
         return 1;
     }
 
-    private static int coverage(CommandSourceStack source) {
-        DerivedPriceService.CoverageReport report = DerivedPriceService.fastCoverage(source.getServer(), 0);
+    private static int report(CommandSourceStack source, int limit) {
+        DerivedPriceService.CoverageReport report = DerivedPriceService.fastCoverage(source.getServer(), limit);
         source.sendSuccess(() -> Component.literal("价格覆盖率:"), false);
         source.sendSuccess(() -> Component.literal("候选物: " + report.candidateCount()
                 + "，可定价: " + report.resolvedCount()
@@ -155,21 +345,257 @@ public final class PriceAdminCommands {
                 + "，缓存: " + report.cachedCount()), false);
         source.sendSuccess(() -> Component.literal("覆盖率: " + coveragePercent(report) + "%"), false);
         source.sendSuccess(() -> Component.literal("来源统计: " + sourceCounts(report)), false);
+        source.sendSuccess(() -> Component.literal("交易级别统计: " + tradeLevelCounts(report.tradeLevelCounts())), false);
+        source.sendSuccess(() -> Component.literal("无法定价样本 " + report.unresolvedSamples().size()
+                + "/" + report.unresolvedCount() + ":"), false);
+        if (!report.unresolvedSamples().isEmpty()) {
+            for (ResourceLocation itemId : report.unresolvedSamples()) {
+                source.sendSuccess(() -> Component.literal("- " + itemId), false);
+            }
+        }
         return report.resolvedCount();
     }
 
-    private static int unresolved(CommandSourceStack source, int limit) {
-        DerivedPriceService.CoverageReport report = DerivedPriceService.fastCoverage(source.getServer(), limit);
-        source.sendSuccess(() -> Component.literal("无法定价样本 " + report.unresolvedSamples().size()
-                + "/" + report.unresolvedCount() + ":"), false);
-        if (report.unresolvedSamples().isEmpty()) {
-            source.sendSuccess(() -> Component.literal("暂无无法定价的候选物。"), false);
-            return 1;
+    private static int auditBuyback(CommandSourceStack source, int limit) {
+        var entries = BuiltInRegistries.ITEM.entrySet().stream()
+                .map(entry -> auditEntry(source, entry.getKey().location()))
+                .filter(AuditEntry::autoBuyback)
+                .sorted(Comparator
+                        .comparingInt(AuditEntry::riskScore).reversed()
+                        .thenComparing(AuditEntry::itemId))
+                .limit(limit)
+                .toList();
+
+        source.sendSuccess(() -> Component.literal("自动回收风险审计: " + entries.size() + " 项"), false);
+        if (entries.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("没有发现当前会被系统自动回收的风险样本。"), false);
+            return 0;
         }
-        for (ResourceLocation itemId : report.unresolvedSamples()) {
-            source.sendSuccess(() -> Component.literal("- " + itemId), false);
+        sendAuditGroup(source, "高风险", entries, entry -> entry.riskScore() >= 6);
+        sendAuditGroup(source, "中风险", entries, entry -> entry.riskScore() >= 3 && entry.riskScore() < 6);
+        sendAuditGroup(source, "低风险", entries, entry -> entry.riskScore() < 3);
+        return entries.size();
+    }
+
+    private static int auditBlockedBuyback(CommandSourceStack source, int limit) {
+        var entries = BuiltInRegistries.ITEM.entrySet().stream()
+                .map(entry -> auditEntry(source, entry.getKey().location()))
+                .filter(entry -> !entry.autoBuyback())
+                .filter(entry -> entry.referencePrice() > 0L
+                        || entry.listDecision() != BuybackListDecision.NONE
+                        || entry.tier() == EconomicTier.UNKNOWN
+                        || entry.tier() == EconomicTier.BOSS_DROP
+                        || entry.tier() == EconomicTier.PROGRESSION_LOCKED
+                        || entry.tier() == EconomicTier.PLAYER_MARKET_ONLY)
+                .sorted(Comparator
+                        .comparingInt(AuditEntry::blockPriority).reversed()
+                        .thenComparing(Comparator.comparingLong(AuditEntry::referencePrice).reversed())
+                        .thenComparing(AuditEntry::itemId))
+                .limit(limit)
+                .toList();
+
+        source.sendSuccess(() -> Component.literal("automatic buyback blocked audit: " + entries.size() + " items"), false);
+        if (entries.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("No notable blocked buyback items found."), false);
+            return 0;
         }
-        return report.unresolvedSamples().size();
+        sendAuditGroup(source, "explicit deny", entries, entry -> entry.listDecision() == BuybackListDecision.DENY);
+        sendAuditGroup(source, "allow list but still blocked", entries, entry -> entry.listDecision() == BuybackListDecision.ALLOW);
+        sendAuditGroup(source, "protected tier", entries,
+                entry -> entry.tier() == EconomicTier.BOSS_DROP
+                        || entry.tier() == EconomicTier.PROGRESSION_LOCKED
+                        || entry.tier() == EconomicTier.PLAYER_MARKET_ONLY);
+        sendAuditGroup(source, "unknown or low confidence", entries,
+                entry -> entry.tier() == EconomicTier.UNKNOWN
+                        || entry.confidence() == com.nekros.market.pricing.PriceConfidence.LOW
+                        || entry.confidence() == com.nekros.market.pricing.PriceConfidence.NONE);
+        return entries.size();
+    }
+
+    private static void sendAuditGroup(CommandSourceStack source, String title, java.util.List<AuditEntry> entries,
+            java.util.function.Predicate<AuditEntry> predicate) {
+        java.util.List<AuditEntry> group = entries.stream().filter(predicate).toList();
+        if (group.isEmpty()) {
+            return;
+        }
+        source.sendSuccess(() -> Component.literal("[" + title + "] " + group.size() + " 项"), false);
+        for (AuditEntry entry : group) {
+            source.sendSuccess(() -> Component.literal(entry.itemId()
+                    + " | risk=" + entry.riskScore()
+                    + " | tier=" + entry.tier()
+                    + " | buy=" + entry.buyPrice()
+                    + " | ref=" + entry.referencePrice()
+                    + " | source=" + entry.source()
+                    + " | confidence=" + entry.confidence()
+                    + " | list=" + entry.listDecision()
+                    + " | " + entry.reason()), false);
+        }
+    }
+
+    private static AuditEntry auditEntry(CommandSourceStack source, ResourceLocation itemId) {
+        PriceProfile profile = PriceResolver.resolve(source.getServer(), itemId);
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        boolean autoBuyback = SystemPriceService.allowsAutomaticBuyback(itemId, profile);
+        BuybackListDecision listDecision = EconomicPolicyRegistry.buybackListDecision(itemId);
+        int risk = 0;
+        StringBuilder reason = new StringBuilder();
+        if (listDecision == BuybackListDecision.ALLOW) {
+            risk += 2;
+            reason.append("explicit_allow ");
+        } else if (listDecision == BuybackListDecision.DENY) {
+            reason.append("explicit_deny ");
+        }
+        if (!"minecraft".equals(itemId.getNamespace())) {
+            risk += 4;
+            reason.append("modded ");
+        }
+        if (profile.systemBuyPrice() >= 1000L) {
+            risk += 3;
+            reason.append("high_price ");
+        } else if (profile.systemBuyPrice() >= 300L) {
+            risk += 1;
+            reason.append("mid_price ");
+        }
+        if (policy.tier() == EconomicTier.RARE_RESOURCE) {
+            risk += 4;
+            reason.append("rare ");
+        } else if (policy.tier() == EconomicTier.UNKNOWN) {
+            risk += 3;
+            reason.append("unknown_tier ");
+        } else if (policy.tier() == EconomicTier.INDUSTRIAL_RENEWABLE) {
+            risk += 2;
+            reason.append("farmable ");
+        }
+        switch (profile.confidence()) {
+            case LOW -> {
+                risk += 3;
+                reason.append("low_confidence ");
+            }
+            case NONE -> {
+                risk += 5;
+                reason.append("no_confidence ");
+            }
+            default -> {
+            }
+        }
+        if (profile.source() == PriceSource.MIXED || profile.source() == PriceSource.PLAYER_MARKET) {
+            risk += 2;
+            reason.append("market_influenced ");
+        }
+        if (reason.length() == 0) {
+            reason.append("normal");
+        }
+        return new AuditEntry(
+                itemId.toString(),
+                autoBuyback,
+                risk,
+                blockPriority(profile, policy, listDecision),
+                policy.tier(),
+                profile.systemBuyPrice(),
+                profile.referencePrice(),
+                profile.source(),
+                profile.confidence(),
+                listDecision,
+                reason.toString().trim());
+    }
+
+    private static int blockPriority(PriceProfile profile, EconomicPolicy policy, BuybackListDecision listDecision) {
+        int priority = 0;
+        if (listDecision == BuybackListDecision.DENY) {
+            priority += 100;
+        } else if (listDecision == BuybackListDecision.ALLOW) {
+            priority += 80;
+        }
+        if (policy.tier() == EconomicTier.BOSS_DROP || policy.tier() == EconomicTier.PROGRESSION_LOCKED) {
+            priority += 60;
+        } else if (policy.tier() == EconomicTier.PLAYER_MARKET_ONLY) {
+            priority += 45;
+        } else if (policy.tier() == EconomicTier.UNKNOWN) {
+            priority += 35;
+        }
+        if (profile.referencePrice() > 0L) {
+            priority += 20;
+        }
+        switch (profile.confidence()) {
+            case NONE -> priority += 12;
+            case LOW -> priority += 8;
+            default -> {
+            }
+        }
+        return priority;
+    }
+
+    private static int recipeTypes(CommandSourceStack source, int limit) {
+        var reports = DerivedPriceService.recipeTypeReport(source.getServer(), limit);
+        source.sendSuccess(() -> Component.literal("配方类型报告: " + reports.size() + " 项"), false);
+        if (reports.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("没有发现可报告的配方类型。"), false);
+            return 0;
+        }
+        for (DerivedPriceService.RecipeTypeReport report : reports) {
+            source.sendSuccess(() -> Component.literal(recipeTypeLine(report)), false);
+        }
+        return reports.size();
+    }
+
+    private static String recipeTypeLine(DerivedPriceService.RecipeTypeReport report) {
+        if (report.handledByBuiltinIndexer()) {
+            return report.recipeType()
+                    + " | 配方=" + report.recipeCount()
+                    + " | 可索引=" + report.indexableCount()
+                    + " | 内置处理";
+        }
+        String note = report.genericNote().isBlank() ? "" : " | " + report.genericNote();
+        return report.recipeType()
+                + " | 配方=" + report.recipeCount()
+                + " | 可索引=" + report.indexableCount()
+                + " | 通用策略=" + report.genericTradeLevel() + "/" + report.genericConfidence()
+                + " | max=" + report.genericMaxResultCount()
+                + " fee=" + report.genericProcessingFee()
+                + " markup=" + fmt(report.genericMarkup())
+                + note;
+    }
+
+    private static int warmupStart(CommandSourceStack source, int itemsPerTick) {
+        PriceWarmupService.WarmupSnapshot snapshot = PriceWarmupService.start(source.getServer(), itemsPerTick);
+        source.sendSuccess(() -> Component.literal("已启动后台价格图预热。候选物: " + snapshot.total()
+                + "，每 tick 处理: " + snapshot.itemsPerTick()
+                + "。可用 /market price warmup status 查看进度。"), true);
+        return 1;
+    }
+
+    private static int warmupStatus(CommandSourceStack source) {
+        PriceWarmupService.WarmupSnapshot snapshot = PriceWarmupService.status(source.getServer());
+        sendWarmupSnapshot(source, snapshot);
+        return snapshot.processed();
+    }
+
+    private static int warmupCancel(CommandSourceStack source) {
+        PriceWarmupService.WarmupSnapshot snapshot = PriceWarmupService.cancel(source.getServer());
+        source.sendSuccess(() -> Component.literal("后台价格图预热已取消。"), true);
+        sendWarmupSnapshot(source, snapshot);
+        return snapshot.processed();
+    }
+
+    private static void sendWarmupSnapshot(CommandSourceStack source, PriceWarmupService.WarmupSnapshot snapshot) {
+        source.sendSuccess(() -> Component.literal("预热状态: " + snapshot.state()), false);
+        source.sendSuccess(() -> Component.literal("进度: " + snapshot.processed() + "/" + snapshot.total()
+                + " (" + String.format(java.util.Locale.ROOT, "%.2f", snapshot.progressPercent()) + "%)"
+                + "，剩余: " + snapshot.remaining()), false);
+        source.sendSuccess(() -> Component.literal("可定价: " + snapshot.resolved()
+                + "，未知: " + snapshot.unresolved()
+                + "，缓存: " + snapshot.cachedCount()), false);
+        source.sendSuccess(() -> Component.literal("每 tick: " + snapshot.itemsPerTick()
+                + "，已用 tick: " + snapshot.elapsedTicks()), false);
+        source.sendSuccess(() -> Component.literal("来源统计: " + sourceCounts(snapshot.sourceCounts())), false);
+        source.sendSuccess(() -> Component.literal("交易级别统计: " + tradeLevelCounts(snapshot.tradeLevelCounts())), false);
+        if (!snapshot.unresolvedSamples().isEmpty()) {
+            source.sendSuccess(() -> Component.literal("未定价样本 "
+                    + snapshot.unresolvedSamples().size() + "/" + snapshot.unresolved() + ":"), false);
+            for (ResourceLocation itemId : snapshot.unresolvedSamples()) {
+                source.sendSuccess(() -> Component.literal("- " + itemId), false);
+            }
+        }
     }
 
     private static String coveragePercent(DerivedPriceService.CoverageReport report) {
@@ -180,13 +606,17 @@ public final class PriceAdminCommands {
     }
 
     private static String sourceCounts(DerivedPriceService.CoverageReport report) {
-        if (report.sourceCounts().isEmpty()) {
+        return sourceCounts(report.sourceCounts());
+    }
+
+    private static String sourceCounts(Map<PriceSource, Integer> sourceCounts) {
+        if (sourceCounts.isEmpty()) {
             return "-";
         }
         StringBuilder builder = new StringBuilder();
         boolean first = true;
         for (PriceSource source : PriceSource.values()) {
-            int count = report.sourceCounts().getOrDefault(source, 0);
+            int count = sourceCounts.getOrDefault(source, 0);
             if (count <= 0) {
                 continue;
             }
@@ -197,6 +627,50 @@ public final class PriceAdminCommands {
             first = false;
         }
         return builder.toString();
+    }
+
+    private static String tradeLevelCounts(Map<TradeLevel, Integer> tradeLevelCounts) {
+        if (tradeLevelCounts.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        boolean first = true;
+        for (TradeLevel tradeLevel : TradeLevel.values()) {
+            int count = tradeLevelCounts.getOrDefault(tradeLevel, 0);
+            if (count <= 0) {
+                continue;
+            }
+            if (!first) {
+                builder.append(", ");
+            }
+            builder.append(tradeLevelName(tradeLevel)).append("=").append(count);
+            first = false;
+        }
+        return builder.toString();
+    }
+
+    private static String tradeLevelName(TradeLevel tradeLevel) {
+        return switch (tradeLevel) {
+            case BLOCKED -> "禁止";
+            case PLAYER_MARKET_ONLY -> "玩家交易";
+            case REFERENCE_ONLY -> "仅参考";
+            case SYSTEM_BUY_ONLY -> "系统回收";
+            case SYSTEM_BUY_AND_SELL -> "系统买卖";
+        };
+    }
+
+    private record AuditEntry(
+            String itemId,
+            boolean autoBuyback,
+            int riskScore,
+            int blockPriority,
+            EconomicTier tier,
+            long buyPrice,
+            long referencePrice,
+            PriceSource source,
+            com.nekros.market.pricing.PriceConfidence confidence,
+            BuybackListDecision listDecision,
+            String reason) {
     }
 
     private static ResourceLocation itemId(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context, String name) {

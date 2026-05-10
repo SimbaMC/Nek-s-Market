@@ -72,7 +72,11 @@ public final class ModNetworking {
         if (MarketActionPayload.BUY.equals(payload.action()) && payload.listingId().isPresent()) {
             MarketService.BuyResult result = MarketService.buy(data, player, payload.listingId().get(), payload.count());
             if (result.success()) {
-                player.displayClientMessage(Component.literal("已购买 " + result.listing().item().getHoverName().getString() + " x" + result.listing().count() + "，花费 " + result.totalPrice() + " " + MarketEconomy.CURRENCY_NAME + "。"), false);
+                String taxText = result.tax() > 0L ? "，成交税 " + result.tax() : "";
+                player.displayClientMessage(Component.literal("已购买 " + result.listing().item().getHoverName().getString()
+                        + " x" + result.listing().count()
+                        + "，花费 " + result.totalPrice()
+                        + taxText + " " + MarketEconomy.CURRENCY_NAME + "。"), false);
                 syncInventory(player);
             } else {
                 player.displayClientMessage(Component.literal(result.message()), false);

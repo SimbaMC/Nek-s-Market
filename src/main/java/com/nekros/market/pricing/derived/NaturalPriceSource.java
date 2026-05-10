@@ -13,6 +13,8 @@ import com.nekros.market.pricing.PriceProfile;
 import com.nekros.market.pricing.PriceSource;
 import com.nekros.market.pricing.TradeLevel;
 import com.nekros.market.pricing.config.PricingConfig;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry;
+import com.nekros.market.pricing.policy.EconomicTier;
 
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -21,10 +23,15 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.tags.TagKey;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.Rarity;
 
 public final class NaturalPriceSource {
     private static final Map<ResourceLocation, NaturalRule> ITEM_RULES = new LinkedHashMap<>();
     private static final List<NaturalTagRule> TAG_RULES = new ArrayList<>();
+    private static final List<MaterialRule> MATERIAL_RULES = new ArrayList<>();
+    private static final List<ShapeRule> SHAPE_RULES = new ArrayList<>();
+    private static final Map<String, Long> RARITY_PRICES = new LinkedHashMap<>();
+    private static final Map<EconomicTier, Double> TIER_MULTIPLIERS = new java.util.EnumMap<>(EconomicTier.class);
     private static boolean loaded;
 
     private NaturalPriceSource() {
@@ -34,6 +41,10 @@ public final class NaturalPriceSource {
         loaded = false;
         ITEM_RULES.clear();
         TAG_RULES.clear();
+        MATERIAL_RULES.clear();
+        SHAPE_RULES.clear();
+        RARITY_PRICES.clear();
+        TIER_MULTIPLIERS.clear();
     }
 
     public static PriceProfile resolve(ResourceLocation itemId) {
@@ -57,7 +68,7 @@ public final class NaturalPriceSource {
             }
         }
 
-        return PriceProfile.unknown(itemId);
+        return inferredFallback(itemId, item);
     }
 
     public static Set<ResourceLocation> configuredItemIds() {
@@ -73,6 +84,20 @@ public final class NaturalPriceSource {
         return ids;
     }
 
+    public static Set<ResourceLocation> inferredItemIds() {
+        Set<ResourceLocation> ids = new LinkedHashSet<>();
+        for (Item item : BuiltInRegistries.ITEM) {
+            if (item == Items.AIR) {
+                continue;
+            }
+            ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(item);
+            if (inferredFallback(itemId, item).source() != PriceSource.UNKNOWN) {
+                ids.add(itemId);
+            }
+        }
+        return ids;
+    }
+
     private static void ensureLoaded() {
         if (loaded) {
             return;
@@ -80,6 +105,10 @@ public final class NaturalPriceSource {
 
         ITEM_RULES.clear();
         TAG_RULES.clear();
+        MATERIAL_RULES.clear();
+        SHAPE_RULES.clear();
+        RARITY_PRICES.clear();
+        TIER_MULTIPLIERS.clear();
         for (String line : builtInItemRules()) {
             NaturalRule rule = parseRule(line, "built-in natural items");
             if (rule != null && rule.id() != null) {
@@ -104,6 +133,32 @@ public final class NaturalPriceSource {
                 TAG_RULES.add(new NaturalTagRule(TagKey.create(Registries.ITEM, rule.id()), rule));
             }
         }
+        for (String line : builtInMaterialRules()) {
+            MaterialRule rule = parseMaterialRule(line);
+            if (rule != null) {
+                MATERIAL_RULES.add(rule);
+            }
+        }
+        for (String line : PricingConfig.inferredMaterials().stream().map(String::valueOf).toList()) {
+            MaterialRule rule = parseMaterialRule(line);
+            if (rule != null) {
+                MATERIAL_RULES.add(rule);
+            }
+        }
+        for (String line : builtInShapeRules()) {
+            ShapeRule rule = parseShapeRule(line);
+            if (rule != null) {
+                SHAPE_RULES.add(rule);
+            }
+        }
+        for (String line : PricingConfig.inferredShapes().stream().map(String::valueOf).toList()) {
+            ShapeRule rule = parseShapeRule(line);
+            if (rule != null) {
+                SHAPE_RULES.add(rule);
+            }
+        }
+        loadRarityPrices();
+        loadTierMultipliers();
         loaded = true;
     }
 
@@ -200,6 +255,40 @@ public final class NaturalPriceSource {
                 "minecraft:coals|20|SYSTEM_BUY_AND_SELL|MEDIUM|燃料矿物资源");
     }
 
+    private static List<String> builtInMaterialRules() {
+        return List.of(
+                "netherite,ancient_debris|10000|netherite/ancient debris",
+                "diamond|1000|diamond",
+                "emerald|800|emerald",
+                "gold|500|gold",
+                "iron,steel|100|iron/steel",
+                "copper|45|copper",
+                "coal,charcoal|20|coal",
+                "redstone|30|redstone",
+                "lapis|35|lapis",
+                "quartz|40|quartz",
+                "amethyst|80|amethyst",
+                "tin,lead,zinc,nickel,silver,aluminum,aluminium|80|common modded metal",
+                "bronze,brass,invar,electrum,constantan|160|alloy",
+                "uranium,osmium,platinum,iridium,titanium,tungsten|600|rare modded metal");
+    }
+
+    private static List<String> builtInShapeRules() {
+        return List.of(
+                "nugget|suffix|0.111111|nugget",
+                "block|suffix|9.0|storage block",
+                "ore|suffix|0.85|ore",
+                "raw_ore|suffix|0.85|raw ore",
+                "raw|prefix|0.90|raw material",
+                "dust|suffix|0.95|dust",
+                "plate|suffix|1.15|plate",
+                "gear|suffix|4.20|gear",
+                "rod|suffix|0.55|rod",
+                "wire|suffix|0.50|wire",
+                "ingot|suffix|1.0|ingot",
+                "gem|suffix|1.0|gem");
+    }
+
     private static NaturalRule parseRule(String line, String configKey) {
         String[] parts = line.split("\\|", -1);
         if (parts.length < 4 || parts.length > 5) {
@@ -245,6 +334,294 @@ public final class NaturalPriceSource {
             NeksMarket.LOGGER.warn("Invalid confidence in {} rule '{}'.", configKey, line);
             return null;
         }
+    }
+
+    private static PriceProfile inferredFallback(ResourceLocation itemId, Item item) {
+        EconomicTier tier = EconomicPolicyRegistry.tierOf(itemId);
+        if (blocksInferredReference(tier)) {
+            return PriceProfile.unknown(itemId);
+        }
+
+        InferredValue inferred = inferredValue(itemId, item);
+        Rarity rarity = new net.minecraft.world.item.ItemStack(item).getRarity();
+        long rarityPrice = rarityPrice(rarity);
+        long price = Math.max(inferred.price(), rarityPrice);
+        if (price <= 0L) {
+            return PriceProfile.unknown(itemId);
+        }
+
+        price = Math.max(1L, Math.round(price * tierReferenceMultiplier(tier)));
+        String reason = inferred.reason().isBlank()
+                ? "稀有度 " + rarity.getSerializedName()
+                : inferred.reason() + "，稀有度 " + rarity.getSerializedName();
+
+        return new PriceProfile(
+                itemId,
+                PriceSource.NATURAL,
+                PriceConfidence.LOW,
+                TradeLevel.REFERENCE_ONLY,
+                price,
+                price,
+                0L,
+                price,
+                0L,
+                0L,
+                "按物品名称/稀有度/经济分级推断的保守参考价: " + reason + "，分级 " + tier + "。");
+    }
+
+    private static boolean blocksInferredReference(EconomicTier tier) {
+        return tier == EconomicTier.BOSS_DROP
+                || tier == EconomicTier.PROGRESSION_LOCKED
+                || tier == EconomicTier.PLAYER_MARKET_ONLY;
+    }
+
+    private static InferredValue inferredValue(ResourceLocation itemId, Item item) {
+        ensureLoaded();
+        InferenceTerms terms = InferenceTerms.of(itemId, item);
+        MaterialRule materialRule = materialRule(terms);
+        long material = materialRule == null ? 0L : materialRule.basePrice();
+        if (material <= 0L) {
+            return new InferredValue(0L, "");
+        }
+        ShapeRule shape = shapeRule(terms);
+        long price = Math.max(1L, Math.round(material * shape.multiplier()));
+        return new InferredValue(price, shape.note() + " 形态，材料 " + materialRule.note() + " 基准 " + material);
+    }
+
+    private static MaterialRule materialRule(InferenceTerms terms) {
+        for (MaterialRule rule : MATERIAL_RULES) {
+            if (rule.matches(terms)) {
+                return rule;
+            }
+        }
+        return null;
+    }
+
+    private static ShapeRule shapeRule(InferenceTerms terms) {
+        for (ShapeRule rule : SHAPE_RULES) {
+            if (rule.matches(terms)) {
+                return rule;
+            }
+        }
+        return ShapeRule.DEFAULT;
+    }
+
+    private static long rarityPrice(Rarity rarity) {
+        return RARITY_PRICES.getOrDefault(rarity.name(), defaultRarityPrice(rarity));
+    }
+
+    private static double tierReferenceMultiplier(EconomicTier tier) {
+        return TIER_MULTIPLIERS.getOrDefault(tier, defaultTierReferenceMultiplier(tier));
+    }
+
+    private static void loadRarityPrices() {
+        for (Rarity rarity : Rarity.values()) {
+            RARITY_PRICES.put(rarity.name(), defaultRarityPrice(rarity));
+        }
+        for (String line : PricingConfig.inferredRarityPrices().stream().map(String::valueOf).toList()) {
+            String[] parts = line.split("\\|", -1);
+            if (parts.length != 2) {
+                NeksMarket.LOGGER.warn("Invalid pricing.inferredRarityPrices rule '{}'. Expected: rarity|price", line);
+                continue;
+            }
+            String rarity = parts[0].trim().toUpperCase(java.util.Locale.ROOT);
+            long price = parsePositiveLong(parts[1], line, "pricing.inferredRarityPrices");
+            RARITY_PRICES.put(rarity, price);
+        }
+    }
+
+    private static void loadTierMultipliers() {
+        for (EconomicTier tier : EconomicTier.values()) {
+            TIER_MULTIPLIERS.put(tier, defaultTierReferenceMultiplier(tier));
+        }
+        for (String line : PricingConfig.inferredTierMultipliers().stream().map(String::valueOf).toList()) {
+            String[] parts = line.split("\\|", -1);
+            if (parts.length != 2) {
+                NeksMarket.LOGGER.warn("Invalid pricing.inferredTierMultipliers rule '{}'. Expected: tier|multiplier", line);
+                continue;
+            }
+            EconomicTier tier = parseEconomicTier(parts[0], line);
+            double multiplier = parsePositiveDouble(parts[1], line, "pricing.inferredTierMultipliers");
+            if (tier != null && multiplier > 0.0D) {
+                TIER_MULTIPLIERS.put(tier, multiplier);
+            }
+        }
+    }
+
+    private static long defaultRarityPrice(Rarity rarity) {
+        return switch (rarity) {
+            case UNCOMMON -> 120L;
+            case RARE -> 800L;
+            case EPIC -> 5000L;
+            default -> 0L;
+        };
+    }
+
+    private static double defaultTierReferenceMultiplier(EconomicTier tier) {
+        return switch (tier) {
+            case COMMON_RENEWABLE -> 0.80D;
+            case COMMON_NON_RENEWABLE -> 1.00D;
+            case INDUSTRIAL_RENEWABLE -> 0.70D;
+            case RARE_RESOURCE -> 1.25D;
+            case BOSS_DROP -> 2.00D;
+            case PROGRESSION_LOCKED -> 1.50D;
+            case PLAYER_MARKET_ONLY -> 1.00D;
+            case UNKNOWN -> 0.80D;
+        };
+    }
+
+    private static EconomicTier parseEconomicTier(String value, String line) {
+        try {
+            return EconomicTier.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            NeksMarket.LOGGER.warn("Invalid tier in pricing.inferredTierMultipliers rule '{}'.", line);
+            return null;
+        }
+    }
+
+    private static MaterialRule parseMaterialRule(String line) {
+        String[] parts = line.split("\\|", -1);
+        if (parts.length < 2 || parts.length > 3) {
+            NeksMarket.LOGGER.warn("Invalid pricing.inferredMaterials rule '{}'. Expected: keyword1,keyword2|basePrice|note", line);
+            return null;
+        }
+        List<String> keywords = java.util.Arrays.stream(parts[0].split(","))
+                .map(String::trim)
+                .filter(value -> !value.isBlank())
+                .map(value -> value.toLowerCase(java.util.Locale.ROOT))
+                .toList();
+        long basePrice = parsePositiveLong(parts[1], line, "pricing.inferredMaterials");
+        String note = parts.length >= 3 && !parts[2].trim().isBlank() ? parts[2].trim() : String.join("/", keywords);
+        if (keywords.isEmpty() || basePrice <= 0L) {
+            NeksMarket.LOGGER.warn("Invalid pricing.inferredMaterials rule '{}'.", line);
+            return null;
+        }
+        return new MaterialRule(keywords, basePrice, note);
+    }
+
+    private static ShapeRule parseShapeRule(String line) {
+        String[] parts = line.split("\\|", -1);
+        if (parts.length < 3 || parts.length > 4) {
+            NeksMarket.LOGGER.warn("Invalid pricing.inferredShapes rule '{}'. Expected: keyword|matchMode|multiplier|note", line);
+            return null;
+        }
+        String keyword = parts[0].trim().toLowerCase(java.util.Locale.ROOT);
+        MatchMode mode = parseMatchMode(parts[1], line);
+        double multiplier = parsePositiveDouble(parts[2], line, "pricing.inferredShapes");
+        String note = parts.length >= 4 && !parts[3].trim().isBlank() ? parts[3].trim() : keyword;
+        if (keyword.isBlank() || mode == null || multiplier <= 0.0D) {
+            NeksMarket.LOGGER.warn("Invalid pricing.inferredShapes rule '{}'.", line);
+            return null;
+        }
+        return new ShapeRule(keyword, mode, multiplier, note);
+    }
+
+    private static MatchMode parseMatchMode(String value, String line) {
+        try {
+            return MatchMode.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException exception) {
+            NeksMarket.LOGGER.warn("Invalid match mode in pricing.inferredShapes rule '{}'.", line);
+            return null;
+        }
+    }
+
+    private static long parsePositiveLong(String value, String line, String configKey) {
+        try {
+            long parsed = Long.parseLong(value.trim());
+            return Math.max(0L, parsed);
+        } catch (NumberFormatException exception) {
+            NeksMarket.LOGGER.warn("Invalid long in {} rule '{}'.", configKey, line);
+            return 0L;
+        }
+    }
+
+    private static double parsePositiveDouble(String value, String line, String configKey) {
+        try {
+            double parsed = Double.parseDouble(value.trim());
+            return Double.isFinite(parsed) ? Math.max(0.0D, parsed) : 0.0D;
+        } catch (NumberFormatException exception) {
+            NeksMarket.LOGGER.warn("Invalid decimal in {} rule '{}'.", configKey, line);
+            return 0.0D;
+        }
+    }
+
+    private record InferredValue(long price, String reason) {
+    }
+
+    private record InferenceTerms(String itemPath, List<String> tagPaths, List<String> tagSegments) {
+        static InferenceTerms of(ResourceLocation itemId, Item item) {
+            List<String> tagPaths = BuiltInRegistries.ITEM.wrapAsHolder(item).tags()
+                    .map(tag -> tag.location().getPath().toLowerCase(java.util.Locale.ROOT))
+                    .toList();
+            List<String> tagSegments = tagPaths.stream()
+                    .flatMap(path -> java.util.Arrays.stream(path.split("[/_]")))
+                    .filter(segment -> !segment.isBlank())
+                    .toList();
+            return new InferenceTerms(itemId.getPath().toLowerCase(java.util.Locale.ROOT), tagPaths, tagSegments);
+        }
+
+        boolean containsKeyword(String keyword) {
+            if (itemPath.contains(keyword)) {
+                return true;
+            }
+            if (tagPaths.stream().anyMatch(path -> path.contains(keyword))) {
+                return true;
+            }
+            return tagSegments.stream().anyMatch(segment -> segment.equals(keyword));
+        }
+    }
+
+    private record MaterialRule(List<String> keywords, long basePrice, String note) {
+        boolean matches(InferenceTerms terms) {
+            return keywords.stream().anyMatch(terms::containsKeyword);
+        }
+    }
+
+    private record ShapeRule(String keyword, MatchMode mode, double multiplier, String note) {
+        static final ShapeRule DEFAULT = new ShapeRule("material", MatchMode.CONTAINS, 1.0D, "材料");
+
+        boolean matches(InferenceTerms terms) {
+            if (matchesPath(terms.itemPath())) {
+                return true;
+            }
+            if (terms.tagPaths().stream().map(path -> path.replace('/', '_')).anyMatch(this::matchesPath)) {
+                return true;
+            }
+            return terms.tagSegments().stream().anyMatch(this::matchesTagSegment);
+        }
+
+        private boolean matchesPath(String path) {
+            String suffix = "_" + keyword;
+            String prefix = keyword + "_";
+            return switch (mode) {
+                case SUFFIX -> path.equals(keyword) || path.endsWith(suffix) || path.contains(suffix + "_");
+                case PREFIX -> path.equals(keyword) || path.startsWith(prefix) || path.contains("_" + prefix);
+                case CONTAINS -> path.contains(keyword);
+            };
+        }
+
+        private boolean matchesTagSegment(String segment) {
+            String plural = keyword.endsWith("s") ? keyword : keyword + "s";
+            return switch (mode) {
+                case SUFFIX -> segment.equals(keyword)
+                        || segment.equals(plural)
+                        || segment.equals(keyword + "s")
+                        || segment.endsWith("_" + keyword)
+                        || segment.endsWith("_" + plural);
+                case PREFIX -> segment.equals(keyword)
+                        || segment.equals(plural)
+                        || segment.equals(keyword + "s")
+                        || segment.startsWith(keyword + "_")
+                        || segment.startsWith(plural + "_");
+                case CONTAINS -> segment.contains(keyword);
+            };
+        }
+    }
+
+    private enum MatchMode {
+        SUFFIX,
+        PREFIX,
+        CONTAINS
     }
 
     private record NaturalRule(ResourceLocation id, long price, TradeLevel tradeLevel, PriceConfidence confidence, String note) {

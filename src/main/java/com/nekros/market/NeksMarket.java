@@ -12,6 +12,7 @@ import com.nekros.market.item.ModItems;
 import com.nekros.market.menu.ModMenus;
 import com.nekros.market.network.ModNetworking;
 import com.nekros.market.pricing.PriceRegistry;
+import com.nekros.market.pricing.derived.PriceWarmupService;
 
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.item.CreativeModeTabs;
@@ -28,6 +29,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
+import net.neoforged.neoforge.event.tick.ServerTickEvent;
 import net.neoforged.neoforge.items.IItemHandler;
 
 @Mod(NeksMarket.MODID)
@@ -82,5 +84,10 @@ public class NeksMarket {
     public void onServerStarted(ServerStartedEvent event) {
         PriceRegistry.reload();
         LOGGER.info("Nek's Market pricing registry loaded. Price graph warmup is skipped during world startup.");
+    }
+
+    @SubscribeEvent
+    public void onServerTick(ServerTickEvent.Post event) {
+        PriceWarmupService.tick(event.getServer());
     }
 }

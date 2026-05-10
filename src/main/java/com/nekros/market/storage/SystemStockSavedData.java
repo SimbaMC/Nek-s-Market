@@ -4,6 +4,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 import com.nekros.market.Config;
+import com.nekros.market.pricing.policy.EconomicPolicy;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry;
 
 import net.minecraft.core.HolderLookup;
 import net.minecraft.nbt.CompoundTag;
@@ -50,6 +52,12 @@ public class SystemStockSavedData extends SavedData {
         return entry.decayedSold(gameTime, halfLifeTicks) - entry.decayedBought(gameTime, halfLifeTicks);
     }
 
+    public double buyMemory(ResourceLocation itemId, long gameTime) {
+        StockEntry entry = entry(itemId);
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        return entry.decayedBuyMemory(gameTime, policy.memoryLambda());
+    }
+
     public void recordSystemBuy(ResourceLocation itemId, int count) {
         recordSystemBuy(itemId, count, 0L);
     }
@@ -68,6 +76,7 @@ public class SystemStockSavedData extends SavedData {
                 entry.totalSold(),
                 boughtPressure,
                 soldPressure,
+                buyMemoryAfterTrade(itemId, entry, count, gameTime),
                 gameTime));
         setDirty();
     }
@@ -90,6 +99,7 @@ public class SystemStockSavedData extends SavedData {
                 addClamped(entry.totalSold(), count),
                 boughtPressure,
                 soldPressure,
+                entry.decayedBuyMemory(gameTime, EconomicPolicyRegistry.resolve(itemId).memoryLambda()),
                 gameTime));
         setDirty();
     }
@@ -102,6 +112,7 @@ public class SystemStockSavedData extends SavedData {
                 entry.totalSold(),
                 entry.recentBought(),
                 entry.recentSold(),
+                entry.buyMemory(),
                 entry.pressureGameTime()));
         setDirty();
     }
@@ -120,6 +131,7 @@ public class SystemStockSavedData extends SavedData {
                 entry.totalSold(),
                 entry.recentBought(),
                 entry.recentSold(),
+                entry.buyMemory(),
                 entry.pressureGameTime()));
         setDirty();
     }
@@ -139,6 +151,7 @@ public class SystemStockSavedData extends SavedData {
             stockTag.putLong("totalSold", entry.getValue().totalSold());
             stockTag.putDouble("recentBought", entry.getValue().recentBought());
             stockTag.putDouble("recentSold", entry.getValue().recentSold());
+            stockTag.putDouble("buyMemory", entry.getValue().buyMemory());
             stockTag.putLong("pressureGameTime", entry.getValue().pressureGameTime());
             stocks.add(stockTag);
         }
@@ -163,6 +176,7 @@ public class SystemStockSavedData extends SavedData {
                         Math.max(0L, stockTag.getLong("totalSold")),
                         Math.max(0.0D, stockTag.getDouble("recentBought")),
                         Math.max(0.0D, stockTag.getDouble("recentSold")),
+                        Math.max(0.0D, stockTag.getDouble("buyMemory")),
                         Math.max(0L, stockTag.getLong("pressureGameTime"))));
             }
         }
@@ -181,14 +195,21 @@ public class SystemStockSavedData extends SavedData {
         return Math.max(1L, Config.SYSTEM_STOCK_PRESSURE_HALF_LIFE_TICKS.get());
     }
 
+    private static double buyMemoryAfterTrade(ResourceLocation itemId, StockEntry entry, int count, long gameTime) {
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        double lambda = policy.memoryLambda();
+        return entry.decayedBuyMemory(gameTime, lambda) + lambda * count;
+    }
+
     public record StockEntry(
             long actualStock,
             long totalBought,
             long totalSold,
             double recentBought,
             double recentSold,
+            double buyMemory,
             long pressureGameTime) {
-        static final StockEntry EMPTY = new StockEntry(0L, 0L, 0L, 0.0D, 0.0D, 0L);
+        static final StockEntry EMPTY = new StockEntry(0L, 0L, 0L, 0.0D, 0.0D, 0.0D, 0L);
 
         double decayedBought(long gameTime, long halfLifeTicks) {
             return decay(recentBought, gameTime, halfLifeTicks);
@@ -196,6 +217,14 @@ public class SystemStockSavedData extends SavedData {
 
         double decayedSold(long gameTime, long halfLifeTicks) {
             return decay(recentSold, gameTime, halfLifeTicks);
+        }
+
+        double decayedBuyMemory(long gameTime, double lambda) {
+            if (buyMemory <= 0.0D || gameTime <= pressureGameTime || lambda <= 0.0D) {
+                return buyMemory;
+            }
+            long elapsed = gameTime - pressureGameTime;
+            return buyMemory * Math.exp(-lambda * elapsed);
         }
 
         private double decay(double value, long gameTime, long halfLifeTicks) {

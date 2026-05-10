@@ -30,9 +30,10 @@ import net.neoforged.neoforge.event.entity.player.ItemTooltipEvent;
 @Mod(value = NeksMarket.MODID, dist = Dist.CLIENT)
 public class NeksMarketClient {
     private static final int TOOLTIP_CACHE_LIMIT = 2048;
-    private static final Map<ResourceLocation, String> RECYCLE_TOOLTIP_CACHE = new LinkedHashMap<>(256, 0.75F, true) {
+    private static final long TOOLTIP_CACHE_TTL_MILLIS = 1000L;
+    private static final Map<ResourceLocation, RecycleTooltipCacheEntry> RECYCLE_TOOLTIP_CACHE = new LinkedHashMap<>(256, 0.75F, true) {
         @Override
-        protected boolean removeEldestEntry(Map.Entry<ResourceLocation, String> eldest) {
+        protected boolean removeEldestEntry(Map.Entry<ResourceLocation, RecycleTooltipCacheEntry> eldest) {
             return size() > TOOLTIP_CACHE_LIMIT;
         }
     };
@@ -46,6 +47,10 @@ public class NeksMarketClient {
     private void registerScreens(RegisterMenuScreensEvent event) {
         event.register(ModMenus.MARKET.get(), MarketScreen::new);
         event.register(ModMenus.SELLER_BOX.get(), SellerBoxScreen::new);
+    }
+
+    public static void clearRecycleTooltipCache() {
+        RECYCLE_TOOLTIP_CACHE.clear();
     }
 
     private void addRecyclePriceTooltip(ItemTooltipEvent event) {
@@ -67,14 +72,15 @@ public class NeksMarketClient {
         }
 
         ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
-        String cached = RECYCLE_TOOLTIP_CACHE.get(itemId);
-        if (cached != null) {
-            return cached;
+        long now = System.currentTimeMillis();
+        RecycleTooltipCacheEntry cached = RECYCLE_TOOLTIP_CACHE.get(itemId);
+        if (cached != null && now - cached.createdAtMillis() <= TOOLTIP_CACHE_TTL_MILLIS) {
+            return cached.text();
         }
 
         long price = recyclePrice(stack);
         String text = price > 0L ? "回收价：" + price : "回收价：暂无";
-        RECYCLE_TOOLTIP_CACHE.put(itemId, text);
+        RECYCLE_TOOLTIP_CACHE.put(itemId, new RecycleTooltipCacheEntry(text, now));
         return text;
     }
 
@@ -84,13 +90,16 @@ public class NeksMarketClient {
         PriceProfile profile = server == null && Minecraft.getInstance().level != null
                 ? PriceResolver.resolve(Minecraft.getInstance().level, stack)
                 : PriceResolver.resolve(server, stack);
-        if (!PriceResolver.allowsSystemBuy(profile.tradeLevel()) || profile.systemBuyPrice() <= 0L) {
+        ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
+        if (!SystemPriceService.allowsAutomaticBuyback(itemId, profile)) {
             return 0L;
         }
         if (server == null) {
             return profile.systemBuyPrice();
         }
-        ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
         return SystemPriceService.dynamicBuyPriceForStock(server, itemId, profile.systemBuyPrice());
+    }
+
+    private record RecycleTooltipCacheEntry(String text, long createdAtMillis) {
     }
 }

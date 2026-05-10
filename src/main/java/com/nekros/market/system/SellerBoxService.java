@@ -4,8 +4,12 @@ import com.nekros.market.economy.MarketEconomy;
 import com.nekros.market.menu.SellerBoxMenu;
 import com.nekros.market.pricing.PriceProfile;
 import com.nekros.market.pricing.PriceResolver;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry;
+import com.nekros.market.pricing.system.SystemBuyPressure;
 import com.nekros.market.pricing.system.SystemPriceService;
+import com.nekros.market.storage.EconomyLedgerSavedData;
 import com.nekros.market.storage.MarketSavedData;
+import com.nekros.market.storage.SystemPayoutBudgetSavedData;
 import com.nekros.market.storage.SystemStockSavedData;
 
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -25,22 +29,21 @@ public final class SellerBoxService {
         int soldItems = 0;
         int skippedStacks = 0;
         long gameTime = player.server.overworld().getGameTime();
+        MarketSavedData data = MarketSavedData.get(player.server);
 
         for (int slot = 0; slot < container.getContainerSize(); slot++) {
             ItemStack stack = container.getItem(slot);
             if (stack.isEmpty()) {
                 continue;
             }
-            long unitPrice = unitBuyPrice(player, stack);
-            if (unitPrice <= 0L) {
+            SystemBuyPressure.Quote quote = buyQuote(player, stack, data);
+            if (quote.totalPrice() <= 0L) {
                 skippedStacks++;
                 continue;
             }
 
-            long stackPrice;
             try {
-                stackPrice = Math.multiplyExact(unitPrice, stack.getCount());
-                totalPrice = Math.addExact(totalPrice, stackPrice);
+                totalPrice = Math.addExact(totalPrice, quote.totalPrice());
             } catch (ArithmeticException exception) {
                 skippedStacks++;
                 continue;
@@ -48,6 +51,12 @@ public final class SellerBoxService {
 
             ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
             SystemStockSavedData.get(player.server).recordSystemBuy(itemId, stack.getCount(), gameTime);
+            EconomyLedgerSavedData.get(player.server).recordSystemBuyPayout(itemId, quote.totalPrice());
+            SystemPayoutBudgetSavedData.get(player.server).recordPayout(
+                    player.getUUID(),
+                    EconomicPolicyRegistry.tierOf(itemId),
+                    quote.totalPrice(),
+                    gameTime);
             soldItems += stack.getCount();
             soldStacks++;
             container.setItem(slot, ItemStack.EMPTY);
@@ -57,7 +66,6 @@ public final class SellerBoxService {
             return Result.fail(skippedStacks > 0 ? "没有可回收的物品。" : "回收箱是空的。");
         }
 
-        MarketSavedData data = MarketSavedData.get(player.server);
         MarketEconomy.add(data, player.getUUID(), totalPrice);
         data.setDirty();
         container.setChanged();
@@ -67,20 +75,13 @@ public final class SellerBoxService {
         return Result.success("已回收 " + soldItems + " 个物品（" + soldStacks + " 组），获得 " + totalPrice + skippedText + "。");
     }
 
-    private static long unitBuyPrice(ServerPlayer player, ItemStack stack) {
+    private static SystemBuyPressure.Quote buyQuote(ServerPlayer player, ItemStack stack, MarketSavedData marketData) {
         if (!safeForAutomaticBuyback(stack)) {
-            return 0L;
+            return new SystemBuyPressure.Quote(0L, 0L, 0.0D, "回收压力: 该物品不可自动回收。");
         }
         PriceProfile profile = PriceResolver.resolve(player.server, stack);
-        if (!PriceResolver.allowsSystemBuy(profile.tradeLevel())) {
-            return 0L;
-        }
-        long unitPrice = profile.systemBuyPrice();
-        if (unitPrice <= 0L) {
-            return 0L;
-        }
         ResourceLocation itemId = BuiltInRegistries.ITEM.getKey(stack.getItem());
-        return SystemPriceService.dynamicBuyPriceForStock(player.server, itemId, unitPrice);
+        return SystemPriceService.quoteAutomaticBuyback(player.server, itemId, profile, stack.getCount(), player.getUUID(), marketData);
     }
 
     private static boolean safeForAutomaticBuyback(ItemStack stack) {

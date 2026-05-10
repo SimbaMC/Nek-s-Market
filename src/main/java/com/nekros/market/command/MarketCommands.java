@@ -4,11 +4,9 @@ import java.util.List;
 import java.util.UUID;
 
 import com.mojang.brigadier.CommandDispatcher;
-import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.LongArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
-import com.mojang.brigadier.builder.ArgumentBuilder;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.nekros.market.Config;
@@ -18,14 +16,19 @@ import com.nekros.market.listing.MarketService;
 import com.nekros.market.menu.MarketMenuSnapshots;
 import com.nekros.market.network.ModNetworking;
 import com.nekros.market.pricing.PriceProfile;
+import com.nekros.market.pricing.PriceResolver;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry;
+import com.nekros.market.pricing.system.SystemBuyPressure;
 import com.nekros.market.pricing.system.SystemPriceBreakdown;
 import com.nekros.market.pricing.system.SystemPriceService;
 import com.nekros.market.pricing.system.SystemTradeQuote;
+import com.nekros.market.storage.EconomyLedgerSavedData;
 import com.nekros.market.storage.MarketSavedData;
+import com.nekros.market.storage.SystemPayoutBudgetSavedData;
 import com.nekros.market.storage.SystemStockSavedData;
-import com.nekros.market.system.PriceMode;
 import com.nekros.market.system.SystemMarketConfig;
 import com.nekros.market.system.SystemMarketOffer;
+import com.nekros.market.system.PriceMode;
 
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.CommandBuildContext;
@@ -46,9 +49,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 
 public final class MarketCommands {
     private static final SuggestionProvider<CommandSourceStack> SYSTEM_TYPE_SUGGESTIONS =
-            (context, builder) -> SharedSuggestionProvider.suggest(List.of("sell_to_player", "buy_from_player"), builder);
-    private static final SuggestionProvider<CommandSourceStack> PRICE_MODE_SUGGESTIONS =
-            (context, builder) -> SharedSuggestionProvider.suggest(List.of("FIXED", "AUTO", "ANCHOR", "MULTIPLIER", "BAND"), builder);
+            (context, builder) -> SharedSuggestionProvider.suggest(List.of("sell", "buy"), builder);
     private static final SuggestionProvider<CommandSourceStack> SYSTEM_CATEGORY_SLOT_SUGGESTIONS =
             (context, builder) -> SharedSuggestionProvider.suggest(
                     java.util.stream.IntStream.rangeClosed(1, Config.SYSTEM_BUY_CATEGORIES.get().size())
@@ -75,6 +76,7 @@ public final class MarketCommands {
                                         EntityArgument.getPlayer(context, "player")))))
                 .then(Commands.literal("money")
                         .requires(source -> source.hasPermission(2))
+                        .executes(context -> economyLedger(context.getSource()))
                         .then(Commands.literal("add")
                                 .then(Commands.argument("player", EntityArgument.player())
                                         .then(Commands.argument("amount", LongArgumentType.longArg(0L))
@@ -89,6 +91,9 @@ public final class MarketCommands {
                                                         context.getSource(),
                                                         EntityArgument.getPlayer(context, "player"),
                                                         LongArgumentType.getLong(context, "amount")))))))
+                .then(Commands.literal("economy")
+                        .requires(source -> source.hasPermission(2))
+                        .executes(context -> economyLedger(context.getSource())))
                 .then(Commands.literal("sell")
                         .then(Commands.argument("price", LongArgumentType.longArg(1L))
                                 .executes(context -> sell(
@@ -136,6 +141,7 @@ public final class MarketCommands {
     private static LiteralArgumentBuilder<CommandSourceStack> systemCommand(CommandBuildContext buildContext) {
         return Commands.literal("system")
                 .requires(source -> source.hasPermission(2))
+                .executes(context -> systemHelp(context.getSource()))
                 .then(Commands.literal("reload")
                         .executes(context -> reloadSystemMarket(context.getSource())))
                 .then(stockCommand(buildContext))
@@ -153,12 +159,19 @@ public final class MarketCommands {
                                                         StringArgumentType.getString(context, "type"),
                                                         itemId(context, "item"),
                                                         IntegerArgumentType.getInteger(context, "count")))))))
+                .then(Commands.literal("testsell")
+                        .then(Commands.argument("item", ItemArgument.item(buildContext))
+                                .then(Commands.argument("count", IntegerArgumentType.integer(1))
+                                        .executes(context -> systemTestSell(
+                                                context.getSource(),
+                                                itemId(context, "item"),
+                                                IntegerArgumentType.getInteger(context, "count"))))))
                 .then(Commands.literal("remove")
                         .then(Commands.argument("id", StringArgumentType.word())
                                 .executes(context -> removeSystemOffer(
                                         context.getSource(),
                                         StringArgumentType.getString(context, "id")))))
-                .then(Commands.literal("shelf")
+                .then(Commands.literal("sell")
                         .then(Commands.argument("item", ItemArgument.item(buildContext))
                                 .then(Commands.argument("category", StringArgumentType.string()).suggests(SYSTEM_CATEGORY_SLOT_SUGGESTIONS)
                                         .executes(context -> addAutoSystemOffer(
@@ -174,7 +187,7 @@ public final class MarketCommands {
                                                         itemId(context, "item"),
                                                         StringArgumentType.getString(context, "category"),
                                                         StringArgumentType.getString(context, "flags")))))))
-                .then(Commands.literal("shelftag")
+                .then(Commands.literal("selltag")
                         .then(Commands.argument("tag", ResourceLocationArgument.id()).suggests(ITEM_TAG_SUGGESTIONS)
                                 .then(Commands.argument("category", StringArgumentType.string()).suggests(SYSTEM_CATEGORY_SLOT_SUGGESTIONS)
                                         .executes(context -> addAutoSystemOffersFromTag(
@@ -190,7 +203,7 @@ public final class MarketCommands {
                                                         ResourceLocationArgument.getId(context, "tag"),
                                                         StringArgumentType.getString(context, "category"),
                                                         StringArgumentType.getString(context, "flags")))))))
-                .then(Commands.literal("buyback")
+                .then(Commands.literal("buy")
                         .then(Commands.argument("item", ItemArgument.item(buildContext))
                                 .executes(context -> addAutoSystemOffer(
                                         context.getSource(),
@@ -202,10 +215,10 @@ public final class MarketCommands {
                                         .executes(context -> addAutoSystemOffer(
                                                 context.getSource(),
                                                 "buy_from_player",
-                                                itemId(context, "item"),
-                                                "",
-                                                StringArgumentType.getString(context, "flags"))))))
-                .then(Commands.literal("buybacktag")
+                                        itemId(context, "item"),
+                                        "",
+                                        StringArgumentType.getString(context, "flags"))))))
+                .then(Commands.literal("buytag")
                         .then(Commands.argument("tag", ResourceLocationArgument.id()).suggests(ITEM_TAG_SUGGESTIONS)
                                 .executes(context -> addAutoSystemOffersFromTag(
                                         context.getSource(),
@@ -217,11 +230,9 @@ public final class MarketCommands {
                                         .executes(context -> addAutoSystemOffersFromTag(
                                                 context.getSource(),
                                                 "buy_from_player",
-                                                ResourceLocationArgument.getId(context, "tag"),
-                                                "",
-                                                StringArgumentType.getString(context, "flags"))))))
-                .then(addPricedSystemCommand(buildContext))
-                .then(addSystemCommand(buildContext));
+                                        ResourceLocationArgument.getId(context, "tag"),
+                                        "",
+                                        StringArgumentType.getString(context, "flags"))))));
     }
 
     private static LiteralArgumentBuilder<CommandSourceStack> stockCommand(CommandBuildContext buildContext) {
@@ -255,79 +266,16 @@ public final class MarketCommands {
                                         itemId(context, "item")))));
     }
 
-    private static LiteralArgumentBuilder<CommandSourceStack> addSystemCommand(CommandBuildContext buildContext) {
-        return Commands.literal("add")
-                .then(Commands.argument("id", StringArgumentType.word())
-                        .then(Commands.argument("type", StringArgumentType.word()).suggests(SYSTEM_TYPE_SUGGESTIONS)
-                                .then(Commands.argument("item", ItemArgument.item(buildContext))
-                                        .then(Commands.argument("price", LongArgumentType.longArg(1L))
-                                                .executes(context -> addSystemOffer(
-                                                        context.getSource(),
-                                                        StringArgumentType.getString(context, "id"),
-                                                        StringArgumentType.getString(context, "type"),
-                                                        itemId(context, "item"),
-                                                        LongArgumentType.getLong(context, "price"),
-                                                        ""))
-                                                .then(Commands.argument("category", StringArgumentType.greedyString()).suggests(SYSTEM_CATEGORY_SLOT_SUGGESTIONS)
-                                                        .executes(context -> addSystemOffer(
-                                                                context.getSource(),
-                                                                StringArgumentType.getString(context, "id"),
-                                                                StringArgumentType.getString(context, "type"),
-                                                                itemId(context, "item"),
-                                                                LongArgumentType.getLong(context, "price"),
-                                                                StringArgumentType.getString(context, "category"))))))));
-    }
-
-    private static LiteralArgumentBuilder<CommandSourceStack> addPricedSystemCommand(CommandBuildContext buildContext) {
-        ArgumentBuilder<CommandSourceStack, ?> flagsArgument = Commands.argument("flags", StringArgumentType.greedyString())
-                .executes(context -> addPricedSystemOffer(
-                        context.getSource(),
-                        StringArgumentType.getString(context, "id"),
-                        StringArgumentType.getString(context, "type"),
-                        itemId(context, "item"),
-                        StringArgumentType.getString(context, "category"),
-                        StringArgumentType.getString(context, "mode"),
-                        LongArgumentType.getLong(context, "basePrice"),
-                        DoubleArgumentType.getDouble(context, "multiplier"),
-                        LongArgumentType.getLong(context, "minPrice"),
-                        LongArgumentType.getLong(context, "maxPrice"),
-                        StringArgumentType.getString(context, "flags")));
-        ArgumentBuilder<CommandSourceStack, ?> maxPriceArgument = Commands.argument("maxPrice", LongArgumentType.longArg(0L))
-                .executes(context -> addPricedSystemOffer(
-                        context.getSource(),
-                        StringArgumentType.getString(context, "id"),
-                        StringArgumentType.getString(context, "type"),
-                        itemId(context, "item"),
-                        StringArgumentType.getString(context, "category"),
-                        StringArgumentType.getString(context, "mode"),
-                        LongArgumentType.getLong(context, "basePrice"),
-                        DoubleArgumentType.getDouble(context, "multiplier"),
-                        LongArgumentType.getLong(context, "minPrice"),
-                        LongArgumentType.getLong(context, "maxPrice"),
-                        ""))
-                .then(flagsArgument);
-        ArgumentBuilder<CommandSourceStack, ?> minPriceArgument = Commands.argument("minPrice", LongArgumentType.longArg(0L))
-                .then(maxPriceArgument);
-        ArgumentBuilder<CommandSourceStack, ?> multiplierArgument = Commands.argument("multiplier", DoubleArgumentType.doubleArg(0.0D))
-                .then(minPriceArgument);
-        ArgumentBuilder<CommandSourceStack, ?> basePriceArgument = Commands.argument("basePrice", LongArgumentType.longArg(0L))
-                .then(multiplierArgument);
-        ArgumentBuilder<CommandSourceStack, ?> modeArgument = Commands.argument("mode", StringArgumentType.word())
-                .suggests(PRICE_MODE_SUGGESTIONS)
-                .then(basePriceArgument);
-        ArgumentBuilder<CommandSourceStack, ?> categoryArgument = Commands.argument("category", StringArgumentType.string())
-                .suggests(SYSTEM_CATEGORY_SLOT_SUGGESTIONS)
-                .then(modeArgument);
-        ArgumentBuilder<CommandSourceStack, ?> itemArgument = Commands.argument("item", ItemArgument.item(buildContext))
-                .then(categoryArgument);
-        ArgumentBuilder<CommandSourceStack, ?> typeArgument = Commands.argument("type", StringArgumentType.word())
-                .suggests(SYSTEM_TYPE_SUGGESTIONS)
-                .then(itemArgument);
-        ArgumentBuilder<CommandSourceStack, ?> idArgument = Commands.argument("id", StringArgumentType.word())
-                .then(typeArgument);
-
-        return Commands.literal("addpriced")
-                .then(idArgument);
+    private static int systemHelp(CommandSourceStack source) {
+        source.sendSuccess(() -> Component.literal("系统商店管理命令:"), false);
+        source.sendSuccess(() -> Component.literal("/market system sell <物品> <分类序号> [flags] - 加入系统商店货架"), false);
+        source.sendSuccess(() -> Component.literal("/market system buy <物品> [flags] - 允许系统回收"), false);
+        source.sendSuccess(() -> Component.literal("/market system selltag <标签ID> <分类序号> [flags] - 批量加入货架"), false);
+        source.sendSuccess(() -> Component.literal("/market system buytag <标签ID> [flags] - 批量允许回收"), false);
+        source.sendSuccess(() -> Component.literal("/market system quote <sell|buy> <物品> [数量] - 试算系统报价"), false);
+        source.sendSuccess(() -> Component.literal("/market system stock <物品> - 查看库存和压力"), false);
+        source.sendSuccess(() -> Component.literal("/market system reload - 重载系统商店配置"), false);
+        return 1;
     }
 
     private static int showHelp(CommandSourceStack source) {
@@ -344,7 +292,7 @@ public final class MarketCommands {
             ModNetworking.sendSnapshot(player, 1);
             return 1;
         } catch (com.mojang.brigadier.exceptions.CommandSyntaxException ignored) {
-            source.sendSuccess(() -> Component.literal("Nek's Market 指令: /market listings, /market sell <价格>, /market buy <ID>, /market claim, /market balance"), false);
+            source.sendSuccess(() -> Component.literal("Nek's Market 指令: /market, /market balance, /market sell <价格>, /market listings, /market buy <ID>, /market claim, /market price item"), false);
             return 1;
         }
     }
@@ -367,6 +315,7 @@ public final class MarketCommands {
     private static int addMoney(CommandSourceStack source, ServerPlayer player, long amount) {
         MarketSavedData data = MarketSavedData.get(source.getServer());
         MarketEconomy.add(data, player.getUUID(), amount);
+        EconomyLedgerSavedData.get(source.getServer()).recordAdminMoneyIssued(amount);
         long balance = MarketEconomy.balance(data, player.getUUID());
         source.sendSuccess(() -> Component.literal("已给 " + player.getGameProfile().getName() + " 增加 " + amount + " " + MarketEconomy.CURRENCY_NAME + "。当前余额: " + balance), true);
         return 1;
@@ -374,8 +323,56 @@ public final class MarketCommands {
 
     private static int setMoney(CommandSourceStack source, ServerPlayer player, long amount) {
         MarketSavedData data = MarketSavedData.get(source.getServer());
+        long oldBalance = MarketEconomy.balance(data, player.getUUID());
         MarketEconomy.setBalance(data, player.getUUID(), amount);
+        if (amount > oldBalance) {
+            EconomyLedgerSavedData.get(source.getServer()).recordAdminMoneyIssued(amount - oldBalance);
+        } else if (oldBalance > amount) {
+            EconomyLedgerSavedData.get(source.getServer()).recordAdminMoneyRemoved(oldBalance - amount);
+        }
         source.sendSuccess(() -> Component.literal("已将 " + player.getGameProfile().getName() + " 的余额设为 " + amount + " " + MarketEconomy.CURRENCY_NAME + "。"), true);
+        return 1;
+    }
+
+    private static int economyLedger(CommandSourceStack source) {
+        MarketSavedData marketData = MarketSavedData.get(source.getServer());
+        EconomyLedgerSavedData ledger = EconomyLedgerSavedData.get(source.getServer());
+        SystemPayoutBudgetSavedData budget = SystemPayoutBudgetSavedData.get(source.getServer());
+        long gameTime = source.getServer().overworld().getGameTime();
+        long dailyBudget = budget.effectiveDailyBudget(marketData, gameTime);
+        long spentToday = budget.spentToday(gameTime);
+        long remainingToday = budget.remainingToday(gameTime);
+        long playerBudget = budget.playerDailyBudget(gameTime);
+        long sellIncomeCredit = budget.sellIncomeCredit(gameTime);
+        long supplyBudget = budget.supplyBudget(marketData);
+        long balances = marketData.balances().values().stream().mapToLong(Long::longValue).sum();
+        long pendingClaims = marketData.claims().values().stream().mapToLong(claim -> claim.money()).sum();
+        long activeListingValue = marketData.listings().values().stream()
+                .mapToLong(listing -> multiplyClamped(listing.price(), listing.count()))
+                .sum();
+
+        source.sendSuccess(() -> Component.literal("经济总账:"), false);
+        source.sendSuccess(() -> Component.literal("玩家余额: " + balances + "，待领取: " + pendingClaims
+                + "，挂单标价总额: " + activeListingValue), false);
+        source.sendSuccess(() -> Component.literal("系统回收支出: " + ledger.systemBuyPayout()
+                + "，系统出售收入: " + ledger.systemSellIncome()
+                + "，系统净投放: " + ledger.netSystemIssue()), false);
+        source.sendSuccess(() -> Component.literal("主要回收支出: " + topItemMoney(ledger.topSystemBuyPayouts(5))), false);
+        source.sendSuccess(() -> Component.literal("今日系统回收预算: "
+                + (dailyBudget <= 0L
+                        ? "无限制"
+                        : spentToday + "/" + dailyBudget + "，剩余 " + remainingToday
+                                + "，单玩家上限 " + playerBudget
+                                + "，货币规模加成 " + supplyBudget
+                                + "，出售回流 " + sellIncomeCredit)), false);
+        source.sendSuccess(() -> Component.literal("主要出售收入: " + topItemMoney(ledger.topSystemSellIncomes(5))), false);
+        source.sendSuccess(() -> Component.literal("玩家交易额: " + ledger.playerTradeVolume()
+                + "，成交税销毁: " + ledger.playerTradeTaxBurned()
+                + "，上架费销毁: " + ledger.listingFeesBurned()
+                + "，总销毁: " + ledger.totalBurned()), false);
+        source.sendSuccess(() -> Component.literal("管理命令投放: " + ledger.adminMoneyIssued()
+                + "，管理命令移除: " + ledger.adminMoneyRemoved()
+                + "，记录净变化: " + ledger.netCurrencyChange()), false);
         return 1;
     }
 
@@ -408,7 +405,9 @@ public final class MarketCommands {
             return 0;
         }
 
-        source.sendSuccess(() -> Component.literal("已购买 " + itemName(result.listing()) + " x" + result.listing().count() + "，花费 " + result.totalPrice() + " " + MarketEconomy.CURRENCY_NAME + "。"), false);
+        String taxText = result.tax() > 0L ? "，成交税 " + result.tax() : "";
+        source.sendSuccess(() -> Component.literal("已购买 " + itemName(result.listing()) + " x" + result.listing().count()
+                + "，花费 " + result.totalPrice() + taxText + " " + MarketEconomy.CURRENCY_NAME + "。"), false);
         return 1;
     }
 
@@ -494,7 +493,7 @@ public final class MarketCommands {
     private static int systemStock(CommandSourceStack source, String type, String itemText) {
         String offerType = type.isBlank() ? "" : normalizeOfferType(type);
         if (!type.isBlank() && offerType == null) {
-            source.sendFailure(Component.literal("类型必须是 sell_to_player 或 buy_from_player。"));
+            source.sendFailure(Component.literal("类型必须是 sell 或 buy。"));
             return 0;
         }
         ResourceLocation itemId = ResourceLocation.tryParse(itemText);
@@ -503,7 +502,9 @@ public final class MarketCommands {
             return 0;
         }
         SystemStockSavedData stock = SystemStockSavedData.get(source.getServer());
-        String heading = offerType.isBlank() ? "系统库存 " + itemId + ":" : "系统库存 " + offerType + " " + itemId + ":";
+        String heading = offerType.isBlank()
+                ? "系统库存 " + itemId + ":"
+                : "系统库存 " + offerTypeName(offerType) + " " + itemId + ":";
         source.sendSuccess(() -> Component.literal(heading), false);
         source.sendSuccess(() -> Component.literal("实际库存: " + stock.actualStock(itemId)), false);
         source.sendSuccess(() -> Component.literal("累计从玩家回收: " + stock.totalBought(itemId)), false);
@@ -512,6 +513,7 @@ public final class MarketCommands {
         long halfLife = Math.max(1L, Config.SYSTEM_STOCK_PRESSURE_HALF_LIFE_TICKS.get());
         source.sendSuccess(() -> Component.literal("近期回收压力: " + formatDecimal(stock.recentBought(itemId, gameTime, halfLife))), false);
         source.sendSuccess(() -> Component.literal("近期售出压力: " + formatDecimal(stock.recentSold(itemId, gameTime, halfLife))), false);
+        source.sendSuccess(() -> Component.literal("回收中期记忆C: " + formatDecimal(stock.buyMemory(itemId, gameTime))), false);
         if (offerType.isBlank()) {
             List<SystemMarketOffer> offers = matchingOffers(itemText);
             if (!offers.isEmpty()) {
@@ -568,7 +570,7 @@ public final class MarketCommands {
     }
 
     private static void sendStockOfferSummary(CommandSourceStack source, SystemStockSavedData stock, ResourceLocation itemId, SystemMarketOffer offer) {
-        String typeText = offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS ? "sell_to_player" : "buy_from_player";
+        String typeText = offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS ? "系统出售" : "系统回收";
         String modeText = offer.pricing().mode().name();
         String flagsText = offer.pricing().flags().isBlank() ? "-" : offer.pricing().flags();
         String available = offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS && offer.pricing().infiniteStock()
@@ -583,7 +585,7 @@ public final class MarketCommands {
     private static int systemQuote(CommandSourceStack source, String type, String itemText, int count) {
         String offerType = normalizeOfferType(type);
         if (offerType == null) {
-            source.sendFailure(Component.literal("类型必须是 sell_to_player 或 buy_from_player。"));
+            source.sendFailure(Component.literal("类型必须是 sell 或 buy。"));
             return 0;
         }
         ResourceLocation itemId = ResourceLocation.tryParse(itemText);
@@ -607,14 +609,14 @@ public final class MarketCommands {
                 : SystemPriceService.quoteBuyFromPlayer(source.getServer(), offer, count);
         SystemPriceBreakdown breakdown = offer.type() == SystemMarketOffer.Type.SYSTEM_SELLS
                 ? SystemPriceService.breakdownSellToPlayer(source.getServer(), offer)
-                : SystemPriceService.breakdownBuyFromPlayer(source.getServer(), offer);
+                : SystemPriceService.breakdownBuyFromPlayer(source.getServer(), offer, count);
         long stock = SystemStockSavedData.get(source.getServer()).actualStock(itemId);
         String stockText = offer.pricing().infiniteStock() ? "无限" : Long.toString(stock);
         String modeText = offer.pricing().mode().name();
         String flagsText = offer.pricing().flags().isBlank() ? "-" : offer.pricing().flags();
 
         source.sendSuccess(() -> Component.literal("系统报价 " + itemId + " x" + count + ":"), false);
-        source.sendSuccess(() -> Component.literal("类型: " + offerType), false);
+        source.sendSuccess(() -> Component.literal("类型: " + offerTypeName(offerType)), false);
         source.sendSuccess(() -> Component.literal("模式: " + modeText), false);
         source.sendSuccess(() -> Component.literal("标记: " + flagsText), false);
         source.sendSuccess(() -> Component.literal("库存: " + stockText), false);
@@ -626,6 +628,56 @@ public final class MarketCommands {
             source.sendSuccess(() -> Component.literal("原因: " + quote.message()), false);
         }
         return quote.allowed() ? 1 : 0;
+    }
+
+    private static int systemTestSell(CommandSourceStack source, String itemText, int count)
+            throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        ResourceLocation itemId = ResourceLocation.tryParse(itemText);
+        if (itemId == null) {
+            source.sendFailure(Component.literal("无效物品 ID: " + itemText));
+            return 0;
+        }
+
+        SystemMarketOffer offer = matchingOffer("buy_from_player", itemText);
+        if (offer == null) {
+            String line = "quote_buy_from_player|buy_from_player|" + itemText + "||AUTO|0|1.0|0|0|";
+            offer = SystemMarketOffer.parse(line);
+        }
+        if (offer == null) {
+            source.sendFailure(Component.literal("无法为 " + itemText + " 生成测试回收报价。"));
+            return 0;
+        }
+
+        SystemTradeQuote quote = SystemPriceService.quoteBuyFromPlayer(source.getServer(), offer, count, player.getUUID());
+        if (!quote.allowed()) {
+            source.sendFailure(Component.literal("测试出售失败: " + quote.message()
+                    + " | 预览单价 " + quote.unitPricePreview()));
+            return 0;
+        }
+
+        MarketSavedData marketData = MarketSavedData.get(source.getServer());
+        MarketEconomy.add(marketData, player.getUUID(), quote.totalPrice());
+        EconomyLedgerSavedData.get(source.getServer()).recordSystemBuyPayout(itemId, quote.totalPrice());
+
+        long gameTime = source.getServer().overworld().getGameTime();
+        SystemPayoutBudgetSavedData.get(source.getServer()).recordPayout(
+                player.getUUID(),
+                EconomicPolicyRegistry.tierOf(itemId),
+                quote.totalPrice(),
+                gameTime);
+
+        SystemStockSavedData stock = SystemStockSavedData.get(source.getServer());
+        stock.recordSystemBuy(itemId, count, gameTime);
+        long currentStock = stock.actualStock(itemId);
+        long balance = MarketEconomy.balance(marketData, player.getUUID());
+
+        source.sendSuccess(() -> Component.literal("[临时测试] 已向系统出售 " + itemId + " x" + count
+                + "，均价 " + quote.unitPricePreview()
+                + "，收入 " + quote.totalPrice()
+                + "，系统库存 " + currentStock
+                + "，当前余额 " + balance + "。"), true);
+        return 1;
     }
 
     private static void sendQuoteBreakdown(CommandSourceStack source, SystemPriceBreakdown breakdown) {
@@ -652,48 +704,24 @@ public final class MarketCommands {
         };
     }
 
-    private static int addSystemOffer(CommandSourceStack source, String id, String type, String item, long price, String category) {
-        SystemMarketConfig.Result result = SystemMarketConfig.addOffer(id, type, item, price, category);
-        if (!result.success()) {
-            source.sendFailure(Component.literal(result.message()));
-            return 0;
-        }
-        source.sendSuccess(() -> Component.literal(result.message()), true);
-        return 1;
-    }
-
-    private static int addPricedSystemOffer(CommandSourceStack source, String id, String type, String item, String category,
-            String modeText, long basePrice, double multiplier, long minPrice, long maxPrice, String flags) {
-        PriceMode mode;
-        try {
-            mode = PriceMode.valueOf(modeText.toUpperCase());
-        } catch (IllegalArgumentException exception) {
-            source.sendFailure(Component.literal("无效价格模式: " + modeText));
-            return 0;
-        }
-
-        SystemMarketConfig.Result result = SystemMarketConfig.addPricedOffer(id, type, item, category, mode, basePrice, multiplier, minPrice, maxPrice, flags);
-        if (!result.success()) {
-            source.sendFailure(Component.literal(result.message()));
-            return 0;
-        }
-        source.sendSuccess(() -> Component.literal(result.message()), true);
-        return 1;
-    }
-
     private static int addAutoSystemOffer(CommandSourceStack source, String type, String item, String category, String flags) {
-        return addPricedSystemOffer(
-                source,
+        SystemMarketConfig.Result result = SystemMarketConfig.addPricedOffer(
                 generatedOfferId(type, item, category),
                 type,
                 item,
                 category,
-                "AUTO",
+                PriceMode.AUTO,
                 0L,
                 1.0D,
                 0L,
                 0L,
                 flags);
+        if (!result.success()) {
+            source.sendFailure(Component.literal(result.message()));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal(result.message()), true);
+        return 1;
     }
 
     private static int addAutoSystemOffersFromTag(CommandSourceStack source, String type, ResourceLocation tagId, String category,
@@ -768,13 +796,21 @@ public final class MarketCommands {
     }
 
     private static String normalizeOfferType(String type) {
-        if ("sell_to_player".equalsIgnoreCase(type) || "system_sells".equalsIgnoreCase(type)) {
+        if ("sell".equalsIgnoreCase(type)
+                || "sell_to_player".equalsIgnoreCase(type)
+                || "system_sells".equalsIgnoreCase(type)) {
             return "sell_to_player";
         }
-        if ("buy_from_player".equalsIgnoreCase(type) || "system_buys".equalsIgnoreCase(type)) {
+        if ("buy".equalsIgnoreCase(type)
+                || "buy_from_player".equalsIgnoreCase(type)
+                || "system_buys".equalsIgnoreCase(type)) {
             return "buy_from_player";
         }
         return null;
+    }
+
+    private static String offerTypeName(String offerType) {
+        return "sell_to_player".equals(offerType) ? "sell/系统出售" : "buy/系统回收";
     }
 
     private static SystemMarketOffer matchingOffer(String offerType, String itemText) {
@@ -814,6 +850,30 @@ public final class MarketCommands {
 
     private static String formatDecimal(double value) {
         return String.format(java.util.Locale.ROOT, "%.2f", value);
+    }
+
+    private static long multiplyClamped(long left, long right) {
+        try {
+            return Math.multiplyExact(left, right);
+        } catch (ArithmeticException exception) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    private static String topItemMoney(List<EconomyLedgerSavedData.ItemMoney> items) {
+        if (items.isEmpty()) {
+            return "-";
+        }
+        StringBuilder builder = new StringBuilder();
+        boolean first = true;
+        for (EconomyLedgerSavedData.ItemMoney item : items) {
+            if (!first) {
+                builder.append(", ");
+            }
+            builder.append(item.itemId()).append("=").append(item.amount());
+            first = false;
+        }
+        return builder.toString();
     }
 
     private static String shortId(UUID id) {

@@ -8,6 +8,7 @@ import com.nekros.market.Config;
 import com.nekros.market.NeksMarket;
 import com.nekros.market.pricing.derived.DerivedPriceService;
 import com.nekros.market.pricing.derived.NaturalPriceSource;
+import com.nekros.market.pricing.policy.EconomicPolicyRegistry;
 
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
@@ -24,6 +25,7 @@ public final class PriceRegistry {
         ANCHORS.clear();
         DerivedPriceService.clearCache();
         NaturalPriceSource.clearCache();
+        EconomicPolicyRegistry.clearCache();
         for (String line : builtInAnchors()) {
             PriceProfile profile = parseAnchor(line);
             if (profile != null) {

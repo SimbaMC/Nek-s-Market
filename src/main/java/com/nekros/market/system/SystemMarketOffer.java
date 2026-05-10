@@ -2,6 +2,8 @@ package com.nekros.market.system;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.nekros.market.Config;
 import com.nekros.market.NeksMarket;
@@ -16,6 +18,7 @@ public record SystemMarketOffer(String id, ItemStack item, long unitPrice, Type 
     private static List<String> syncedOfferLines;
     private static List<String> syncedFallbackOfferLines;
     private static List<String> syncedStockLines = List.of();
+    private static final Set<String> WARNED_UNKNOWN_ITEMS = ConcurrentHashMap.newKeySet();
 
     public enum Type {
         SYSTEM_SELLS,
@@ -153,7 +156,9 @@ public record SystemMarketOffer(String id, ItemStack item, long unitPrice, Type 
 
         var item = BuiltInRegistries.ITEM.get(itemId);
         if (item == Items.AIR && !itemId.equals(BuiltInRegistries.ITEM.getKey(Items.AIR))) {
-            NeksMarket.LOGGER.warn("Unknown item '{}' in system market offer '{}'.", itemId, configLine);
+            if (WARNED_UNKNOWN_ITEMS.add(itemId.toString())) {
+                NeksMarket.LOGGER.warn("Unknown item '{}' in system market offer '{}'. This item may come from a disabled optional mod.", itemId, configLine);
+            }
             return null;
         }
 
