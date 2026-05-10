@@ -51,6 +51,13 @@ public final class PriceAdminCommands {
                                 .executes(context -> historyItem(
                                         context.getSource(),
                                         itemId(context, "item")))))
+                .then(Commands.literal("explain")
+                        .requires(source -> source.hasPermission(2))
+                        .executes(context -> explainHand(context.getSource()))
+                        .then(Commands.argument("item", ItemArgument.item(buildContext))
+                                .executes(context -> explainItem(
+                                        context.getSource(),
+                                        itemId(context, "item")))))
                 .then(policyCommand(buildContext))
                 .then(Commands.literal("curve")
                         .requires(source -> source.hasPermission(2))
@@ -119,6 +126,7 @@ public final class PriceAdminCommands {
         source.sendSuccess(() -> Component.literal("价格诊断命令:"), false);
         source.sendSuccess(() -> Component.literal("/market price item [物品] - 查看价格，不填则读取主手"), false);
         source.sendSuccess(() -> Component.literal("/market price history [物品] - 查看近期成交，不填则读取主手"), false);
+        source.sendSuccess(() -> Component.literal("/market price explain [物品] - 查看价格来源与推导解释，不填则读取主手"), false);
         source.sendSuccess(() -> Component.literal("/market price policy [物品] - 查看经济分级，不填则读取主手"), false);
         source.sendSuccess(() -> Component.literal("/market price report [数量] - 查看覆盖率和未定价样本"), false);
         source.sendSuccess(() -> Component.literal("/market price reload - 重载定价配置"), false);
@@ -167,6 +175,36 @@ public final class PriceAdminCommands {
 
     private static int historyItem(CommandSourceStack source, ResourceLocation itemId) {
         sendHistory(source, itemId);
+        return 1;
+    }
+
+    private static int explainHand(CommandSourceStack source) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer player = source.getPlayerOrException();
+        ItemStack stack = player.getMainHandItem();
+        if (stack.isEmpty()) {
+            source.sendFailure(Component.literal("主手为空。"));
+            return 0;
+        }
+        return explainItem(source, BuiltInRegistries.ITEM.getKey(stack.getItem()));
+    }
+
+    private static int explainItem(CommandSourceStack source, ResourceLocation itemId) {
+        PriceProfile profile = PriceResolver.resolve(source.getServer(), itemId);
+        EconomicPolicy policy = EconomicPolicyRegistry.resolve(itemId);
+        source.sendSuccess(() -> Component.literal("价格解释: " + itemId), false);
+        source.sendSuccess(() -> Component.literal("来源: " + sourceName(profile.source())
+                + "，分级: " + policy.tier()
+                + "，置信度: " + profile.confidence()
+                + "，交易级别: " + profile.tradeLevel()), false);
+        source.sendSuccess(() -> Component.literal("参考价: " + profile.referencePrice()
+                + "，系统回收基准: " + profile.systemBuyPrice()
+                + "，系统出售基准: " + profile.systemSellPrice()), false);
+        String explanation = profile.explanation();
+        if (explanation == null || explanation.isBlank()) {
+            source.sendSuccess(() -> Component.literal("推导说明: 暂无（可能来自固定锚点或未定价）。"), false);
+            return 1;
+        }
+        source.sendSuccess(() -> Component.literal("推导说明: " + explanation), false);
         return 1;
     }
 
